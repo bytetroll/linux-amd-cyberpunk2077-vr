@@ -1,0 +1,86 @@
+Items.cigarette_i_stick:
+  animationParameters: []
+  animFeatureName: ItemData
+  animName: ui_garment_pose
+  animSetResource: ''
+  appearanceSuffixes: []
+  appearanceSuffixesOwnerOverride: []
+  attachmentSlots: []
+  buyPrice:
+    - Price.BasePrice
+    - Price.BuyMultiplier
+    - Price.ItemQualityMultiplier
+    - Price.BuyPrice_StreetCred_Discount
+  cameraForward: {x: 0, y: 0, z: 0}
+  cameraUp: {x: 0, y: 0, z: 0}
+  canDrop: False
+  connections: []
+  crosshair: Crosshairs.None
+  deprecated: False
+  dropObject: defaultItemDrop
+  effectors: []
+  enableNpcRPGData: False
+  entityName: cigarette_i_stick
+  equipAreas: []
+  equipPrereqs: []
+  equivalent: Items.crowd_cigarette_i_stick
+  friendlyName: cigarette_i_stick
+  gameplayRestrictions:
+    - GameplayRestriction.VehicleCombatNoInterruptions
+  garmentOffset: 0
+  hairSkinnedMeshComponents: []
+  icon: UIIcon.ItemIcon
+  iconPath: ''
+  isCached: False
+  isCoreCW: False
+  isCustomizable: False
+  isGarment: False
+  isPart: False
+  isSingleInstance: True
+  itemType: ItemType.Gen_Misc
+  localizedName: ''
+  mass: 1
+  minigameInstance: minigame_v2.DefaultItemMinigame
+  objectActions:
+    - ItemAction.Drop
+    - ItemAction.Disassemble
+  OnAttach:
+    - Items_glp.Cigarette
+  OnEquip: []
+  OnLooted: []
+  parts: []
+  placementSlots:
+    - AttachmentSlots.WeaponLeft
+    - AttachmentSlots.WeaponRight
+  powerLevelDeterminedByParent: False
+  previewBBoxOverride: []
+  quality: Quality.Common
+  qualityRestrictedByParent: False
+  replicateWhenNotActive: False
+  requiredSlots: []
+  savable: False
+  sellPrice:
+    - Price.BasePrice
+    - Price.SellMultiplier
+    - Price.ItemQualitySellMultiplier
+    - Price.CraftingTraitMultiplier
+    - Price.SellPriceIntrinsicModMult
+  slotPartList: []
+  slotPartListPreset: []
+  statModifierGroups: []
+  statModifiers: []
+  statPools: []
+  tags:
+    - Prop
+    - HideInBackpackUI
+    - HideAtVendor
+    - HideInUI
+    - ItemDecoration_Cigarette
+  $type: gamedataItem_Record
+  upgradeCostMult: 1
+  useHeadgearGarmentAggregator: False
+  useNewSpawnMethod: False
+  usesVariants: False
+  variants: []
+  visualTags: []
+  weakspots: []

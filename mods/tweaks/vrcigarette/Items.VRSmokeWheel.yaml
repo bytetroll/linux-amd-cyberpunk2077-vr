@@ -1,0 +1,16 @@
+# VR radial wheel item. Held prop (like the cigarette) that carries a worlduiWidgetComponent
+# (vr_wheel.inkwidget) instead of a mesh. Attached to a hand slot (Splinter/WeaponRight1) by reds.
+# Inherits everything from the cigarette item, then overrides the entity + strips the cig gameplay.
+Items.VRSmokeWheel:
+  $base: Items.cigarette_i_stick
+  entityName: vr_smoke_wheel          # -> factory entry mapping to vrcigarette\vr_wheel.ent
+  friendlyName: vr_smoke_wheel
+  equivalent: Items.VRSmokeWheel
+  OnAttach: []                        # no cigarette effector
+  OnEquip: []
+  tags:
+    - Prop
+  placementSlots:
+    - AttachmentSlots.WeaponRight
+    - AttachmentSlots.WeaponLeft
+    - AttachmentSlots.Splinter

@@ -1,0 +1,214 @@
+diff --git a/include/RED4ext/Handle.hpp b/include/RED4ext/Handle.hpp
+index 197c191f..cdf6ff55 100644
+--- a/include/RED4ext/Handle.hpp
++++ b/include/RED4ext/Handle.hpp
+@@ -30,6 +30,18 @@ public:
+         ctor(this, aPtr);
+     }
+ 
++    // Converting a handle to one of its base classes. MSVC resolves a `static_cast<Handle<Base>>(derived)`
++    // by binding this to `Handle(const Handle&)` after the templated conversion operator below; clang
++    // also sees `explicit Handle(T*)` reached through SharedPtrWithAccess's implicit `operator T*()`,
++    // and reports the two user-defined conversions as ambiguous. Giving the conversion its own
++    // constructor -- taking the derived handle by reference, so the argument binds with an exact
++    // match and beats the pointer path outright -- pins the one path MSVC already takes.
++    template<typename U, typename = std::enable_if_t<std::is_base_of_v<T, U> && !std::is_same_v<T, U>>>
++    Handle(const Handle<U>& aOther) noexcept
++        : Handle(*reinterpret_cast<const Handle*>(&aOther))
++    {
++    }
++
+     Handle(const Handle& aOther) noexcept
+     {
+         BaseType::CopyConstructFrom(aOther);
+diff --git a/include/RED4ext/Scripting/Natives/Generated/anim/AnimDatabaseCollectionEntry.hpp b/include/RED4ext/Scripting/Natives/Generated/anim/AnimDatabaseCollectionEntry.hpp
+index 628b53d6..1950ac28 100644
+--- a/include/RED4ext/Scripting/Natives/Generated/anim/AnimDatabaseCollectionEntry.hpp
++++ b/include/RED4ext/Scripting/Natives/Generated/anim/AnimDatabaseCollectionEntry.hpp
+@@ -32,3 +32,8 @@ using animAnimDatabaseCollectionEntry = anim::AnimDatabaseCollectionEntry;
+ } // namespace RED4ext
+ 
+ // clang-format on
++
++// Handle/Ref members above name forward-declared types that clang requires complete once
++// a translation unit instantiates this destructor; MSVC does not. Included after the struct.
++#include <RED4ext/Scripting/Natives/Generated/anim/GenericAnimDatabase.hpp>
++#include <RED4ext/Scripting/Natives/Generated/C2dArray.hpp>
+diff --git a/include/RED4ext/Scripting/Natives/Generated/anim/AnimGraph.hpp b/include/RED4ext/Scripting/Natives/Generated/anim/AnimGraph.hpp
+index e82240c7..6104d0a7 100644
+--- a/include/RED4ext/Scripting/Natives/Generated/anim/AnimGraph.hpp
++++ b/include/RED4ext/Scripting/Natives/Generated/anim/AnimGraph.hpp
+@@ -56,3 +56,8 @@ using animAnimGraph = anim::AnimGraph;
+ } // namespace RED4ext
+ 
+ // clang-format on
++
++// Handle/Ref members above name forward-declared types that clang requires complete once
++// a translation unit instantiates this destructor; MSVC does not. Included after the struct.
++#include <RED4ext/Scripting/Natives/Generated/anim/AnimNode_Base.hpp>
++#include <RED4ext/Scripting/Natives/Generated/anim/AnimNode_Root.hpp>
+diff --git a/include/RED4ext/Scripting/Natives/Generated/anim/AnimNode_Container.hpp b/include/RED4ext/Scripting/Natives/Generated/anim/AnimNode_Container.hpp
+index d3db41fe..5ae615cd 100644
+--- a/include/RED4ext/Scripting/Natives/Generated/anim/AnimNode_Container.hpp
++++ b/include/RED4ext/Scripting/Natives/Generated/anim/AnimNode_Container.hpp
+@@ -29,3 +29,7 @@ using animAnimNode_Container = anim::AnimNode_Container;
+ } // namespace RED4ext
+ 
+ // clang-format on
++
++// Handle/Ref members above name forward-declared types that clang requires complete once
++// a translation unit instantiates this destructor; MSVC does not. Included after the struct.
++#include <RED4ext/Scripting/Natives/Generated/anim/AnimNode_Base.hpp>
+diff --git a/include/RED4ext/Scripting/Natives/animRig.hpp b/include/RED4ext/Scripting/Natives/animRig.hpp
+index cc609630..28814b95 100644
+--- a/include/RED4ext/Scripting/Natives/animRig.hpp
++++ b/include/RED4ext/Scripting/Natives/animRig.hpp
+@@ -49,3 +49,7 @@ struct Rig : CResource
+ };
+ RED4EXT_ASSERT_SIZE(Rig, 0x180);
+ } // namespace RED4ext::anim
++
++// Handle members above name forward-declared types that clang requires complete once a
++// translation unit instantiates the destructor; MSVC does not. Included after the struct.
++#include <RED4ext/Scripting/Natives/Generated/anim/IRigIkSetup.hpp>
+diff --git a/include/RED4ext/Scripting/Natives/inkControllerProcessor.hpp b/include/RED4ext/Scripting/Natives/inkControllerProcessor.hpp
+index b0e3688d..38c535e2 100644
+--- a/include/RED4ext/Scripting/Natives/inkControllerProcessor.hpp
++++ b/include/RED4ext/Scripting/Natives/inkControllerProcessor.hpp
+@@ -20,3 +20,7 @@ struct ControllerProcessor : ISerializable
+ RED4EXT_ASSERT_SIZE(ControllerProcessor, 0x60);
+ RED4EXT_ASSERT_OFFSET(ControllerProcessor, controllers, 0x50);
+ } // namespace RED4ext::ink
++
++// Handle members above name forward-declared types that clang requires complete once a
++// translation unit instantiates the destructor; MSVC does not. Included after the struct.
++#include <RED4ext/Scripting/Natives/Generated/ink/IWidgetController.hpp>
+diff --git a/include/RED4ext/Scripting/Natives/inkHudWidgetSpawnEntry.hpp b/include/RED4ext/Scripting/Natives/inkHudWidgetSpawnEntry.hpp
+index aaa57950..35356f8c 100644
+--- a/include/RED4ext/Scripting/Natives/inkHudWidgetSpawnEntry.hpp
++++ b/include/RED4ext/Scripting/Natives/inkHudWidgetSpawnEntry.hpp
+@@ -68,3 +68,9 @@ RED4EXT_ASSERT_OFFSET(HudWidgetSpawnEntry, gameController, 0x108);
+ RED4EXT_ASSERT_OFFSET(HudWidgetSpawnEntry, affectedByGlitchEffect, 0x127);
+ } // namespace ink
+ } // namespace RED4ext
++
++// Handle members above name forward-declared types that clang requires complete once a
++// translation unit instantiates the destructor; MSVC does not. Included after the struct.
++#include <RED4ext/Scripting/Natives/Generated/ink/IWidgetController.hpp>
++#include <RED4ext/Scripting/Natives/Generated/ink/VirtualWindow.hpp>
++#include <RED4ext/Scripting/Natives/Generated/ink/WidgetLibraryResource.hpp>
+diff --git a/include/RED4ext/Scripting/Natives/inkIWidgetComponentWrapper.hpp b/include/RED4ext/Scripting/Natives/inkIWidgetComponentWrapper.hpp
+index e369ab5b..178523be 100644
+--- a/include/RED4ext/Scripting/Natives/inkIWidgetComponentWrapper.hpp
++++ b/include/RED4ext/Scripting/Natives/inkIWidgetComponentWrapper.hpp
+@@ -64,3 +64,9 @@ struct IWidgetComponentWrapper
+ RED4EXT_ASSERT_SIZE(IWidgetComponentWrapper, 0x8);
+ } // namespace ink
+ } // namespace RED4ext
++
++// Handle members above name forward-declared types that clang requires complete once a
++// translation unit instantiates the destructor; MSVC does not. Included after the struct.
++#include <RED4ext/Scripting/Natives/Generated/ink/IWidgetController.hpp>
++#include <RED4ext/Scripting/Natives/Generated/ink/MultiChildren.hpp>
++#include <RED4ext/Scripting/Natives/Generated/ink/VirtualWindow.hpp>
+diff --git a/include/RED4ext/Scripting/Natives/inkLayer.hpp b/include/RED4ext/Scripting/Natives/inkLayer.hpp
+index 7d06d1cf..6bf176eb 100644
+--- a/include/RED4ext/Scripting/Natives/inkLayer.hpp
++++ b/include/RED4ext/Scripting/Natives/inkLayer.hpp
+@@ -46,3 +46,14 @@ RED4EXT_ASSERT_OFFSET(Layer, controllerProcessor, 0x60);
+ RED4EXT_ASSERT_OFFSET(Layer, isInteractive, 0xB7);
+ RED4EXT_ASSERT_OFFSET(Layer, inputContext, 0xC0);
+ } // namespace RED4ext::ink
++
++// Same arrangement as inkWidget.hpp: the Handle members above name forward-declared types that
++// clang requires to be complete when a translation unit instantiates ~ink::Layer, and MSVC does
++// not. Included after the struct so the definitions land once Layer itself is complete.
++#include <RED4ext/Scripting/Natives/Generated/ink/Widget.hpp>
++#include <RED4ext/Scripting/Natives/Generated/ink/MultiChildren.hpp>
++#include <RED4ext/Scripting/Natives/Generated/ink/ControllerProcessor.hpp>
++#include <RED4ext/Scripting/Natives/Generated/ink/SpawningProcessor.hpp>
++#include <RED4ext/Scripting/Natives/Generated/ink/VirtualWindow.hpp>
++#include <RED4ext/Scripting/Natives/Generated/ink/WidgetLibraryItemInstance.hpp>
++#include <RED4ext/Scripting/Natives/Generated/ink/anim/Processor.hpp>
+diff --git a/include/RED4ext/Scripting/Natives/inkLayerProxy.hpp b/include/RED4ext/Scripting/Natives/inkLayerProxy.hpp
+index 4bc90255..5aad32eb 100644
+--- a/include/RED4ext/Scripting/Natives/inkLayerProxy.hpp
++++ b/include/RED4ext/Scripting/Natives/inkLayerProxy.hpp
+@@ -20,3 +20,7 @@ struct LayerProxy : ISerializable
+ };
+ RED4EXT_ASSERT_SIZE(LayerProxy, 0x68);
+ } // namespace RED4ext::ink
++
++// Handle members above name forward-declared types that clang requires complete once a
++// translation unit instantiates the destructor; MSVC does not. Included after the struct.
++#include <RED4ext/Scripting/Natives/Generated/ink/WidgetLibraryResource.hpp>
+diff --git a/include/RED4ext/Scripting/Natives/inkWidget.hpp b/include/RED4ext/Scripting/Natives/inkWidget.hpp
+index 40ff0f1a..ea1c33e2 100644
+--- a/include/RED4ext/Scripting/Natives/inkWidget.hpp
++++ b/include/RED4ext/Scripting/Natives/inkWidget.hpp
+@@ -60,3 +60,17 @@ struct Widget : IScriptable
+ };
+ RED4EXT_ASSERT_SIZE(Widget, 0x200);
+ } // namespace RED4ext::ink
++
++// The Handle/DynArray members above name types that are only forward-declared here. MSVC never
++// needs them complete; clang does, the moment a translation unit instantiates ~ink::Widget. Pull
++// the definitions in AFTER this struct rather than with the includes at the top, because
++// WidgetLogicController reaches back here: it includes inkIWidgetLogicController, which includes
++// Generated/ink/Widget.hpp, which includes this file. Included at the top, the inner hit is
++// swallowed by #pragma once and Generated/ink/Widget.hpp then asserts the size of a Widget that is
++// still mid-declaration. Down here, Widget is complete, so the cycle terminates cleanly.
++#include <RED4ext/Scripting/Natives/Generated/ink/IEffect.hpp>
++#include <RED4ext/Scripting/Natives/Generated/ink/LayerProxy.hpp>
++#include <RED4ext/Scripting/Natives/Generated/ink/PropertyManager.hpp>
++#include <RED4ext/Scripting/Natives/Generated/ink/StyleResourceWrapper.hpp>
++#include <RED4ext/Scripting/Natives/Generated/ink/UserData.hpp>
++#include <RED4ext/Scripting/Natives/Generated/ink/WidgetLogicController.hpp>
+--- a/src/RTTI/IType.cpp
++++ b/src/RTTI/IType.cpp
+@@ -2,4 +2,4 @@
+ #error Please define 'RED4EXT_STATIC_LIB' to compile this file.
+ #endif
+ 
+-#include <RED4ext/rtti/IType-inl.hpp>
++#include <RED4ext/RTTI/IType-inl.hpp>
+--- a/include/RED4ext/RTTI/IType.hpp
++++ b/include/RED4ext/RTTI/IType.hpp
+@@ -4,7 +4,7 @@
+ #include <RED4ext/CString.hpp>
+ #include <RED4ext/IO/BaseStream.hpp>
+ #include <RED4ext/InstanceType.hpp>
+-#include <RED4ext/rtti/ERTTIType.hpp>
++#include <RED4ext/RTTI/ERTTIType.hpp>
+ 
+ namespace RED4ext
+ {
+@@ -87,5 +87,5 @@
+ } // namespace RED4ext
+ 
+ #ifdef RED4EXT_HEADER_ONLY
+-#include <RED4ext/rtti/IType-inl.hpp>
++#include <RED4ext/RTTI/IType-inl.hpp>
+ #endif
+--- a/include/RED4ext/RTTI/IType-inl.hpp
++++ b/include/RED4ext/RTTI/IType-inl.hpp
+@@ -1,7 +1,7 @@
+ #pragma once
+ 
+ #ifdef RED4EXT_STATIC_LIB
+-#include <RED4ext/rtti/IType.hpp>
++#include <RED4ext/RTTI/IType.hpp>
+ #endif
+ 
+ #include <RED4ext/CNamePool.hpp>
+--- a/include/RED4ext/RTTITypes.hpp
++++ b/include/RED4ext/RTTITypes.hpp
+@@ -10,7 +10,7 @@
+ #include <RED4ext/InstanceType.hpp>
+ #include <RED4ext/Map.hpp>
+ #include <RED4ext/Utils.hpp>
+-#include <RED4ext/rtti/IType.hpp>
++#include <RED4ext/RTTI/IType.hpp>
+ 
+ namespace RED4ext
+ {

@@ -1,0 +1,321 @@
+diff --git a/wineopenxr/make_openxr b/wineopenxr/make_openxr
+--- a/wineopenxr/make_openxr
++++ b/wineopenxr/make_openxr
+@@ -2259,21 +2259,10 @@
+         else:
+             body += "    if (!in) return;\n"
+ 
+-        if needs_copy and self.array.is_struct() and self.array.struct.polymorphic:
++        if needs_copy and self.array.is_struct() and self.array.struct.polymorphic and not pointer_array:
+             win32 = self.direction == Direction.OUTPUT and self.conv
+-            if pointer_array and self.conv and self.direction == Direction.INPUT:
+-                inp = f"(({win_type} *)UlongToPtr(in[0]))->"
+-            elif pointer_array:
+-                inp = "in[0]->"
+-            else:
+-                inp = "in->"
+-            if not pointer_array:
+-                dstvar2 = "in_elem_size"
+-                win32_2 = self.direction == Direction.INPUT and self.conv
+-            else:
+-                win32_2 = None
+-                dstvar2 = None
+-            body += self.array.struct.polymorphic_elem_size(inp, "out_elem_size", win32, dstvar2, win32_2)
++            win32_2 = self.direction == Direction.INPUT and self.conv
++            body += self.array.struct.polymorphic_elem_size("in->", "out_elem_size", win32, "in_elem_size", win32_2)
+ 
+         if self.direction == Direction.INPUT:
+             if not pointer_array and self.array.is_struct() and self.array.struct.polymorphic:
+@@ -2308,6 +2297,11 @@
+                     body += u"        if (in[i])\n"
+                     body += u"        {\n"
+                     if convert.operand.polymorphic:
++                        # Pointer arrays can contain different structure types. Size each
++                        # non-null element separately before converting its full payload.
++                        win32 = self.direction == Direction.OUTPUT and self.conv
++                        size = struct.polymorphic_elem_size(f"({inp})->", "out_elem_size", win32, None, None)
++                        body += "".join("        " + line if line.strip() else line for line in size.splitlines(True))
+                         body += f"            out[i] = conversion_context_alloc(ctx, out_elem_size);\n"
+                     else:
+                         body += u"            out[i] = conversion_context_alloc(ctx, sizeof(*out[i]));\n"
+diff --git a/wineopenxr/openxr_thunks.c b/wineopenxr/openxr_thunks.c
+--- a/wineopenxr/openxr_thunks.c
++++ b/wineopenxr/openxr_thunks.c
+@@ -8232,45 +8232,45 @@
+     unsigned int out_elem_size;
+ 
+     if (!in || !count) return NULL;
+-    switch(((XrSpatialCapabilityConfigurationBaseHeaderEXT32 *)UlongToPtr(in[0]))->type)
+-    {
+-    case XR_TYPE_SPATIAL_CAPABILITY_CONFIGURATION_ANCHOR_EXT:
+-        out_elem_size = sizeof(XrSpatialCapabilityConfigurationAnchorEXT);
+-        break;
+-    case XR_TYPE_SPATIAL_CAPABILITY_CONFIGURATION_APRIL_TAG_EXT:
+-        out_elem_size = sizeof(XrSpatialCapabilityConfigurationAprilTagEXT);
+-        break;
+-    case XR_TYPE_SPATIAL_CAPABILITY_CONFIGURATION_ARUCO_MARKER_EXT:
+-        out_elem_size = sizeof(XrSpatialCapabilityConfigurationArucoMarkerEXT);
+-        break;
+-    case XR_TYPE_SPATIAL_CAPABILITY_CONFIGURATION_DEPTH_RAYCAST_ANDROID:
+-        out_elem_size = sizeof(XrSpatialCapabilityConfigurationDepthRaycastANDROID);
+-        break;
+-    case XR_TYPE_SPATIAL_CAPABILITY_CONFIGURATION_IMAGE_TRACKING_EXT:
+-        out_elem_size = sizeof(XrSpatialCapabilityConfigurationImageTrackingEXT);
+-        break;
+-    case XR_TYPE_SPATIAL_CAPABILITY_CONFIGURATION_MICRO_QR_CODE_EXT:
+-        out_elem_size = sizeof(XrSpatialCapabilityConfigurationMicroQrCodeEXT);
+-        break;
+-    case XR_TYPE_SPATIAL_CAPABILITY_CONFIGURATION_OBJECT_TRACKING_ANDROID:
+-        out_elem_size = sizeof(XrSpatialCapabilityConfigurationObjectTrackingANDROID);
+-        break;
+-    case XR_TYPE_SPATIAL_CAPABILITY_CONFIGURATION_PLANE_TRACKING_EXT:
+-        out_elem_size = sizeof(XrSpatialCapabilityConfigurationPlaneTrackingEXT);
+-        break;
+-    case XR_TYPE_SPATIAL_CAPABILITY_CONFIGURATION_QR_CODE_EXT:
+-        out_elem_size = sizeof(XrSpatialCapabilityConfigurationQrCodeEXT);
+-        break;
+-    default:
+-        out_elem_size = sizeof(XrSpatialCapabilityConfigurationBaseHeaderEXT);
+-        break;
+-    }
+-
+     out = conversion_context_alloc(ctx, count * sizeof(*out));
+     for (i = 0; i < count; i++)
+     {
+         if (in[i])
+         {
++            switch(((XrSpatialCapabilityConfigurationBaseHeaderEXT32 *)UlongToPtr(in[i]))->type)
++            {
++            case XR_TYPE_SPATIAL_CAPABILITY_CONFIGURATION_ANCHOR_EXT:
++                out_elem_size = sizeof(XrSpatialCapabilityConfigurationAnchorEXT);
++                break;
++            case XR_TYPE_SPATIAL_CAPABILITY_CONFIGURATION_APRIL_TAG_EXT:
++                out_elem_size = sizeof(XrSpatialCapabilityConfigurationAprilTagEXT);
++                break;
++            case XR_TYPE_SPATIAL_CAPABILITY_CONFIGURATION_ARUCO_MARKER_EXT:
++                out_elem_size = sizeof(XrSpatialCapabilityConfigurationArucoMarkerEXT);
++                break;
++            case XR_TYPE_SPATIAL_CAPABILITY_CONFIGURATION_DEPTH_RAYCAST_ANDROID:
++                out_elem_size = sizeof(XrSpatialCapabilityConfigurationDepthRaycastANDROID);
++                break;
++            case XR_TYPE_SPATIAL_CAPABILITY_CONFIGURATION_IMAGE_TRACKING_EXT:
++                out_elem_size = sizeof(XrSpatialCapabilityConfigurationImageTrackingEXT);
++                break;
++            case XR_TYPE_SPATIAL_CAPABILITY_CONFIGURATION_MICRO_QR_CODE_EXT:
++                out_elem_size = sizeof(XrSpatialCapabilityConfigurationMicroQrCodeEXT);
++                break;
++            case XR_TYPE_SPATIAL_CAPABILITY_CONFIGURATION_OBJECT_TRACKING_ANDROID:
++                out_elem_size = sizeof(XrSpatialCapabilityConfigurationObjectTrackingANDROID);
++                break;
++            case XR_TYPE_SPATIAL_CAPABILITY_CONFIGURATION_PLANE_TRACKING_EXT:
++                out_elem_size = sizeof(XrSpatialCapabilityConfigurationPlaneTrackingEXT);
++                break;
++            case XR_TYPE_SPATIAL_CAPABILITY_CONFIGURATION_QR_CODE_EXT:
++                out_elem_size = sizeof(XrSpatialCapabilityConfigurationQrCodeEXT);
++                break;
++            default:
++                out_elem_size = sizeof(XrSpatialCapabilityConfigurationBaseHeaderEXT);
++                break;
++            }
++
+             out[i] = conversion_context_alloc(ctx, out_elem_size);
+             convert_XrSpatialCapabilityConfigurationBaseHeaderEXT_win32_to_host(ctx, (XrSpatialCapabilityConfigurationBaseHeaderEXT32 *)UlongToPtr(in[i]), out[i]);
+         }
+@@ -9499,45 +9499,45 @@
+     unsigned int out_elem_size;
+ 
+     if (!in || !count) return NULL;
+-    switch(in[0]->type)
+-    {
+-    case XR_TYPE_COMPOSITION_LAYER_CUBE_KHR:
+-        out_elem_size = sizeof(XrCompositionLayerCubeKHR);
+-        break;
+-    case XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR:
+-        out_elem_size = sizeof(XrCompositionLayerCylinderKHR);
+-        break;
+-    case XR_TYPE_COMPOSITION_LAYER_EQUIRECT2_KHR:
+-        out_elem_size = sizeof(XrCompositionLayerEquirect2KHR);
+-        break;
+-    case XR_TYPE_COMPOSITION_LAYER_EQUIRECT_KHR:
+-        out_elem_size = sizeof(XrCompositionLayerEquirectKHR);
+-        break;
+-    case XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_ANDROID:
+-        out_elem_size = sizeof(XrCompositionLayerPassthroughANDROID);
+-        break;
+-    case XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_FB:
+-        out_elem_size = sizeof(XrCompositionLayerPassthroughFB);
+-        break;
+-    case XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_HTC:
+-        out_elem_size = sizeof(XrCompositionLayerPassthroughHTC);
+-        break;
+-    case XR_TYPE_COMPOSITION_LAYER_PROJECTION:
+-        out_elem_size = sizeof(XrCompositionLayerProjection);
+-        break;
+-    case XR_TYPE_COMPOSITION_LAYER_QUAD:
+-        out_elem_size = sizeof(XrCompositionLayerQuad);
+-        break;
+-    default:
+-        out_elem_size = sizeof(XrCompositionLayerBaseHeader);
+-        break;
+-    }
+-
+     out = conversion_context_alloc(ctx, count * sizeof(*out));
+     for (i = 0; i < count; i++)
+     {
+         if (in[i])
+         {
++            switch((in[i])->type)
++            {
++            case XR_TYPE_COMPOSITION_LAYER_CUBE_KHR:
++                out_elem_size = sizeof(XrCompositionLayerCubeKHR);
++                break;
++            case XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR:
++                out_elem_size = sizeof(XrCompositionLayerCylinderKHR);
++                break;
++            case XR_TYPE_COMPOSITION_LAYER_EQUIRECT2_KHR:
++                out_elem_size = sizeof(XrCompositionLayerEquirect2KHR);
++                break;
++            case XR_TYPE_COMPOSITION_LAYER_EQUIRECT_KHR:
++                out_elem_size = sizeof(XrCompositionLayerEquirectKHR);
++                break;
++            case XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_ANDROID:
++                out_elem_size = sizeof(XrCompositionLayerPassthroughANDROID);
++                break;
++            case XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_FB:
++                out_elem_size = sizeof(XrCompositionLayerPassthroughFB);
++                break;
++            case XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_HTC:
++                out_elem_size = sizeof(XrCompositionLayerPassthroughHTC);
++                break;
++            case XR_TYPE_COMPOSITION_LAYER_PROJECTION:
++                out_elem_size = sizeof(XrCompositionLayerProjection);
++                break;
++            case XR_TYPE_COMPOSITION_LAYER_QUAD:
++                out_elem_size = sizeof(XrCompositionLayerQuad);
++                break;
++            default:
++                out_elem_size = sizeof(XrCompositionLayerBaseHeader);
++                break;
++            }
++
+             out[i] = conversion_context_alloc(ctx, out_elem_size);
+             convert_XrCompositionLayerBaseHeader_win64_to_host(ctx, in[i], out[i]);
+         }
+@@ -10158,45 +10158,45 @@
+     unsigned int out_elem_size;
+ 
+     if (!in || !count) return NULL;
+-    switch(((XrCompositionLayerBaseHeader32 *)UlongToPtr(in[0]))->type)
+-    {
+-    case XR_TYPE_COMPOSITION_LAYER_CUBE_KHR:
+-        out_elem_size = sizeof(XrCompositionLayerCubeKHR);
+-        break;
+-    case XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR:
+-        out_elem_size = sizeof(XrCompositionLayerCylinderKHR);
+-        break;
+-    case XR_TYPE_COMPOSITION_LAYER_EQUIRECT2_KHR:
+-        out_elem_size = sizeof(XrCompositionLayerEquirect2KHR);
+-        break;
+-    case XR_TYPE_COMPOSITION_LAYER_EQUIRECT_KHR:
+-        out_elem_size = sizeof(XrCompositionLayerEquirectKHR);
+-        break;
+-    case XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_ANDROID:
+-        out_elem_size = sizeof(XrCompositionLayerPassthroughANDROID);
+-        break;
+-    case XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_FB:
+-        out_elem_size = sizeof(XrCompositionLayerPassthroughFB);
+-        break;
+-    case XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_HTC:
+-        out_elem_size = sizeof(XrCompositionLayerPassthroughHTC);
+-        break;
+-    case XR_TYPE_COMPOSITION_LAYER_PROJECTION:
+-        out_elem_size = sizeof(XrCompositionLayerProjection);
+-        break;
+-    case XR_TYPE_COMPOSITION_LAYER_QUAD:
+-        out_elem_size = sizeof(XrCompositionLayerQuad);
+-        break;
+-    default:
+-        out_elem_size = sizeof(XrCompositionLayerBaseHeader);
+-        break;
+-    }
+-
+     out = conversion_context_alloc(ctx, count * sizeof(*out));
+     for (i = 0; i < count; i++)
+     {
+         if (in[i])
+         {
++            switch(((XrCompositionLayerBaseHeader32 *)UlongToPtr(in[i]))->type)
++            {
++            case XR_TYPE_COMPOSITION_LAYER_CUBE_KHR:
++                out_elem_size = sizeof(XrCompositionLayerCubeKHR);
++                break;
++            case XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR:
++                out_elem_size = sizeof(XrCompositionLayerCylinderKHR);
++                break;
++            case XR_TYPE_COMPOSITION_LAYER_EQUIRECT2_KHR:
++                out_elem_size = sizeof(XrCompositionLayerEquirect2KHR);
++                break;
++            case XR_TYPE_COMPOSITION_LAYER_EQUIRECT_KHR:
++                out_elem_size = sizeof(XrCompositionLayerEquirectKHR);
++                break;
++            case XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_ANDROID:
++                out_elem_size = sizeof(XrCompositionLayerPassthroughANDROID);
++                break;
++            case XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_FB:
++                out_elem_size = sizeof(XrCompositionLayerPassthroughFB);
++                break;
++            case XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_HTC:
++                out_elem_size = sizeof(XrCompositionLayerPassthroughHTC);
++                break;
++            case XR_TYPE_COMPOSITION_LAYER_PROJECTION:
++                out_elem_size = sizeof(XrCompositionLayerProjection);
++                break;
++            case XR_TYPE_COMPOSITION_LAYER_QUAD:
++                out_elem_size = sizeof(XrCompositionLayerQuad);
++                break;
++            default:
++                out_elem_size = sizeof(XrCompositionLayerBaseHeader);
++                break;
++            }
++
+             out[i] = conversion_context_alloc(ctx, out_elem_size);
+             convert_XrCompositionLayerBaseHeader_win32_to_host(ctx, (XrCompositionLayerBaseHeader32 *)UlongToPtr(in[i]), out[i]);
+         }
+@@ -20858,24 +20858,24 @@
+     unsigned int out_elem_size;
+ 
+     if (!in || !count) return NULL;
+-    switch(((XrBindingModificationBaseHeaderKHR32 *)UlongToPtr(in[0]))->type)
+-    {
+-    case XR_TYPE_INTERACTION_PROFILE_ANALOG_THRESHOLD_VALVE:
+-        out_elem_size = sizeof(XrInteractionProfileAnalogThresholdVALVE);
+-        break;
+-    case XR_TYPE_INTERACTION_PROFILE_DPAD_BINDING_EXT:
+-        out_elem_size = sizeof(XrInteractionProfileDpadBindingEXT);
+-        break;
+-    default:
+-        out_elem_size = sizeof(XrBindingModificationBaseHeaderKHR);
+-        break;
+-    }
+-
+     out = conversion_context_alloc(ctx, count * sizeof(*out));
+     for (i = 0; i < count; i++)
+     {
+         if (in[i])
+         {
++            switch(((XrBindingModificationBaseHeaderKHR32 *)UlongToPtr(in[i]))->type)
++            {
++            case XR_TYPE_INTERACTION_PROFILE_ANALOG_THRESHOLD_VALVE:
++                out_elem_size = sizeof(XrInteractionProfileAnalogThresholdVALVE);
++                break;
++            case XR_TYPE_INTERACTION_PROFILE_DPAD_BINDING_EXT:
++                out_elem_size = sizeof(XrInteractionProfileDpadBindingEXT);
++                break;
++            default:
++                out_elem_size = sizeof(XrBindingModificationBaseHeaderKHR);
++                break;
++            }
++
+             out[i] = conversion_context_alloc(ctx, out_elem_size);
+             convert_XrBindingModificationBaseHeaderKHR_win32_to_host(ctx, (XrBindingModificationBaseHeaderKHR32 *)UlongToPtr(in[i]), out[i]);
+         }
