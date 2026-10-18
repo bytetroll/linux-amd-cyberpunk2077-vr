@@ -1,4 +1,5 @@
 #include "Runtimes/HudQuad.hpp"
+#include "Runtimes/XrQueueBridge.hpp"
 #include "Render/GpuStageProfile.hpp"
 #include "Core/LiveControls.hpp"
 #include "Utils/DebugGate.hpp"
@@ -24,15 +25,15 @@ void Quad::RetireCompleted(uint64_t completed) {
     for(auto& slot:copies) if(slot.frame && slot.fenceValue<=completed) slot.frame.reset();
 }
 bool Quad::Ensure(XrSession session, ID3D12Device* device, uint32_t w, uint32_t h) {
-    if(submissionFailed)return false;
+    if(submissionFailed || cvr::xr::QueueBridgeFailed())return false;
     if (swapchain && w==width && h==height) return true;
     if (fence && fence->GetCompletedValue()<fenceValue) return false;
     if (swapchain) {
         if(acquired) {
             XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};wait.timeout=0;
-            if(xrWaitSwapchainImage(swapchain,&wait)!=XR_SUCCESS)return false;
+            if(cvr::xr::WaitSwapchainImage(swapchain,&wait)!=XR_SUCCESS)return false;
             XrSwapchainImageReleaseInfo release{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
-            if(XR_FAILED(xrReleaseSwapchainImage(swapchain,&release)))return false;
+            if(XR_FAILED(cvr::xr::ReleaseSwapchainImage(swapchain,&release)))return false;
             acquired=false;
         }
         xrDestroySwapchain(swapchain);swapchain=XR_NULL_HANDLE;images.clear();
@@ -93,16 +94,17 @@ bool Quad::UpdateImage(const std::shared_ptr<Frame>& frame,ID3D12CommandQueue* q
         acquired=true;
     }
     XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};wait.timeout=pipelined?0:100000000;
-    const auto waited=xrWaitSwapchainImage(swapchain,&wait);
+    const auto waited=cvr::xr::WaitSwapchainImage(swapchain,&wait);
     if(waited==XR_TIMEOUT_EXPIRED)return pipelined && lastStamp!=0;
     if(waited!=XR_SUCCESS)return false;
     auto& slot=*freeSlot;
+    uint64_t writtenValue=0;
     auto release=[&] {
         XrSwapchainImageReleaseInfo info{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
         const double releaseStartMs=XrDiagNowMs();
-        const auto result=xrReleaseSwapchainImage(swapchain,&info);
+        const auto result=cvr::xr::ReleaseSwapchainImage(swapchain,&info,fence.Get(),writtenValue);
         XrPhaseNoteHudTimes(0,XrDiagNowMs()-releaseStartMs,0);
-        acquired=false;return result;
+        if(XR_SUCCEEDED(result))acquired=false;return result;
     };
     if(acquiredIndex>=images.size() || FAILED(slot.allocator->Reset()) ||
        FAILED(slot.commands->Reset(slot.allocator.Get(),nullptr))) {release();return false;}
@@ -124,10 +126,11 @@ bool Quad::UpdateImage(const std::shared_ptr<Frame>& frame,ID3D12CommandQueue* q
     ID3D12CommandList* lists[]={commands};
     const double queueStartMs=XrDiagNowMs();
     queue->ExecuteCommandLists(1,lists);
-    const bool signaled=SUCCEEDED(queue->Signal(fence.Get(),slot.fenceValue));
+    writtenValue=slot.fenceValue;
+    const bool signaled=cvr::xr::SignalSwapchainWork(queue,fence.Get(),writtenValue);
     XrPhaseNoteHudTimes(XrDiagNowMs()-queueStartMs,0,0);
     if(signaled)cvr::gpu::profile::Submitted(gpuProfile,queue,fence.Get(),slot.fenceValue);
-    else submissionFailed=true;
+    else {submissionFailed=true;return false;}
     const auto released=release();
     if(!signaled || XR_FAILED(released))return false;
     lastStamp=frame->serial;publishedTick=frame->stamp;
@@ -226,17 +229,17 @@ const XrCompositionLayerBaseHeader* Quad::Prepare(XrSession session, XrSpace spa
     return reinterpret_cast<const XrCompositionLayerBaseHeader*>(&layer);
 }
 
-void Quad::Shutdown() {
+void Quad::Shutdown(bool gpuDrained) {
     SetConsumerReady(false,channel);
-    if (fence && fence->GetCompletedValue()<fenceValue && event) {
+    if (!gpuDrained && fence && fence->GetCompletedValue()<fenceValue && event) {
         fence->SetEventOnCompletion(fenceValue,event);
         if (WaitForSingleObject(event,1000)!=WAIT_OBJECT_0) return;
     }
-    if(swapchain && acquired) {
+    if(!gpuDrained && swapchain && acquired) {
         XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};wait.timeout=100000000;
-        if(xrWaitSwapchainImage(swapchain,&wait)!=XR_SUCCESS)return;
+        if(cvr::xr::WaitSwapchainImage(swapchain,&wait)!=XR_SUCCESS)return;
         XrSwapchainImageReleaseInfo release{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
-        if(XR_FAILED(xrReleaseSwapchainImage(swapchain,&release)))return;
+        if(XR_FAILED(cvr::xr::ReleaseSwapchainImage(swapchain,&release)))return;
         acquired=false;
     }
     if (swapchain) xrDestroySwapchain(swapchain);

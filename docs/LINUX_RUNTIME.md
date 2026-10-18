@@ -34,6 +34,20 @@ python3 tools/proton_openxr_hotfix.py restore --module "/path/to/Proton - Experi
 
 Steam updates may replace the module. Re-run `status` after an update. **Do not bypass the version guards or apply the byte offset to a different build.** A newer build may already fix the underlying problem and needs separate verification.
 
+## Controller menus and runtime queue
+
+The native menu uses gamepad A for selection and loading-screen skips. The Index's right A button retains that behavior; the right trigger also confirms while native menu mode is active. Release the trigger before selecting. A trigger held through a menu transition is suppressed until release so it cannot immediately fire a weapon. This uses the game's existing cursor/navigation path; it does not add a tracked-controller pointer to the native menu.
+
+The Linux quality pass binds OpenXR to a separate runtime queue when both Wine and SteamVR are detected. Capture and rendering stay on the game queue, with explicit fence handoffs before image writes and releases. This follows the availability requirements of [OpenXR's D3D12 binding](https://registry.khronos.org/OpenXR/specs/1.1-khr/html/xrspec.html#XR_KHR_D3D12_enable). Its performance benefit still requires measurement in the headset.
+
+The startup log reports `[xrqueue] mode=dedicated-runtime` when active. For a controlled comparison, use this Steam launch option to select the previous shared-queue path, then restart the game:
+
+```text
+CVR_XR_SHARED_QUEUE=1 %command%
+```
+
+Remove that environment assignment to return to automatic selection. Preserve any other existing launch options. Native Windows and other OpenXR runtimes retain the shared-queue path by default. If dedicated-queue creation fails, startup falls back to the shared queue; a later synchronization failure stops layer submissions and requires a game restart.
+
 ## SteamVR settings used in testing
 
 The tested setup used these two keys in SteamVR's `steamvr` configuration section:

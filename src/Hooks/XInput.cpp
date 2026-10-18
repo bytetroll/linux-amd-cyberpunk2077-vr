@@ -20,6 +20,7 @@
 #include "Hooks/SwimmingInput.hpp"
 #include "Hooks/LadderInput.hpp"
 #include "Hooks/InputPacketSequence.hpp"
+#include "Hooks/NativeMenuInput.hpp"
 #include "Hooks/AnalogStick.hpp"
 #include "Hooks/KeypadInput.hpp"
 #include "Hooks/CyberwareChord.hpp"
@@ -47,8 +48,9 @@
 // применялись", and the same for a braindance. Every remap in this file was written for gameplay -- the
 // grip standing in for a shoulder, the ear gesture on LB, the dash on B, the magazine drop's mask, the
 // walk tiers on the left stick -- and in a menu they are at best redundant and at worst they eat a
-// button the menu itself needs. With this on, a menu or a braindance gets the raw controller: buttons,
-// triggers and sticks merged as they come, and nothing else.
+// button the menu itself needs. With this on, a menu or a braindance gets the original buttons and
+// sticks. In native menus only, the VR right trigger also supplies A (click/skip); braindance trigger
+// bindings and physical gamepad inputs keep their original meanings.
 //
 // The one thing that goes with it: the grips no longer page menu tabs (that was a port remap too).
 extern "C" __declspec(dllexport) int32_t CyberpunkVR_InputDefaultInUi = 1;
@@ -256,13 +258,46 @@ static float ApplyStickDeadzone(float v, float dz) {
     return s * (a - dz) / (1.0f - dz);
 }
 
-static void PublishMergedPacket(XINPUT_STATE* state) {
+struct NativeMenuInputTrace {
+    int mode{};
+    bool captured{};
+    uint16_t buttons{};
+    float trigger{};
+    bool triggerActive{};
+    bool confirm{};
+};
+
+static cvr::input::NativeMenuTriggerResult UpdateNativeMenuTrigger(bool menu, float trigger, bool available = true) {
+    static std::mutex mutex;
+    static cvr::input::NativeMenuTrigger input;
+    std::lock_guard lock(mutex);
+    return input.Update(menu, trigger, available);
+}
+
+static void PublishMergedPacket(XINPUT_STATE* state, const NativeMenuInputTrace& input) {
     static std::mutex mutex;
     static cvr::input::InputPacketSequence<XINPUT_GAMEPAD> packets;
     std::lock_guard lock(mutex);
     // Axes matter too: a swimming glide must publish its final zero, even
     // when no buttons/triggers changed and the real pad packet stayed fixed.
     state->dwPacketNumber=packets.Publish(state->Gamepad);
+    // Bounded independently of DEBUG: distinguish missing runtime button data
+    // from input swallowed after it reaches the virtual pad. Held inputs log once.
+    static uint64_t previous = ~uint64_t{};
+    static unsigned lines = 0;
+    if (input.mode == 0 || lines >= 48) return;
+    const uint64_t bits = uint64_t(input.buttons) | (uint64_t(state->Gamepad.wButtons) << 16)
+        | (uint64_t(input.trigger >= .65f) << 32) | (uint64_t(input.confirm) << 33)
+        | (uint64_t(input.captured) << 34) | (uint64_t(input.triggerActive) << 35);
+    if (bits == previous) return;
+    previous = bits;
+    ++lines;
+    DWORD foregroundPid = 0;
+    GetWindowThreadProcessId(GetForegroundWindow(), &foregroundPid);
+    Log("[menuinput] mode=%d capture=%d rawButtons=%04X rawRT=%.2f rtActive=%d triggerA=%d outputButtons=%04X outputRT=%u packet=%u foreground=%d sample=%u/48\n",
+        input.mode, int(input.captured), unsigned(input.buttons), input.trigger, int(input.triggerActive), int(input.confirm),
+        unsigned(state->Gamepad.wButtons), unsigned(state->Gamepad.bRightTrigger),
+        unsigned(state->dwPacketNumber), int(foregroundPid == GetCurrentProcessId()), lines);
 }
 
 DWORD WINAPI HookedXInputGetState(DWORD dwUserIndex, XINPUT_STATE* pState) {
@@ -271,10 +306,19 @@ DWORD WINAPI HookedXInputGetState(DWORD dwUserIndex, XINPUT_STATE* pState) {
 
     if (!pState) return r;
     if (dwUserIndex != 0) return r;
-    if (g_liveControls.xrXInputHook == 0) { cvr::quest::SuspendManualClueInput();cvr::swimming::ResetInput();cvr::ladder::ResetInput();return r; }
+    if (g_liveControls.xrXInputHook == 0) { UpdateNativeMenuTrigger(false,0,false);cvr::quest::SuspendManualClueInput();cvr::swimming::ResetInput();cvr::ladder::ResetInput();return r; }
 
     VRControllerState vr{};
-    if (!OpenXRManager::Get().GetControllerState(&vr)) { cvr::quest::SuspendManualClueInput();cvr::swimming::ResetInput();cvr::ladder::ResetInput();return r; }
+    if (!OpenXRManager::Get().GetControllerState(&vr)) { UpdateNativeMenuTrigger(false,0,false);cvr::quest::SuspendManualClueInput();cvr::swimming::ResetInput();cvr::ladder::ResetInput();return r; }
+    const bool overlayCapture = cvr::vrui::CapturesInput();
+    const int menuMode = g_menuModeValue;
+    const float rawRightTrigger = vr.rightTrigger;
+    // Leave finger-curl publication raw; only the game's input sees a consumed
+    // menu trigger, including the held tail of a press that leaves the menu.
+    const auto menuTrigger = UpdateNativeMenuTrigger(menuMode != 0 && !overlayCapture, rawRightTrigger, vr.rightTriggerActive);
+    const NativeMenuInputTrace menuTrace{menuMode,overlayCapture,vr.buttons,rawRightTrigger,vr.rightTriggerActive,menuTrigger.confirm};
+    vr.buttons = cvr::input::NativeMenuButtons(vr.buttons, menuTrigger);
+    if (menuTrigger.consumeTrigger) vr.rightTrigger = 0.f;
     cvr::input::DispatchCyberwareChord();
 
     if (r != ERROR_SUCCESS) {
@@ -287,12 +331,12 @@ DWORD WINAPI HookedXInputGetState(DWORD dwUserIndex, XINPUT_STATE* pState) {
         vr.buttons &= static_cast<uint16_t>(~0x4000);
         pState->Gamepad.wButtons &= static_cast<uint16_t>(~0x4000);
     }
-    if(cvr::vrui::CapturesInput()){
+    if(overlayCapture){
         pState->Gamepad={};g_lookStickX.store(0,std::memory_order_relaxed);
         cvr::swimming::ResetInput();cvr::ladder::ResetInput();
         for(int slot:{30,49,vrshared::kRightSecondaryBtn,vrshared::kLeftSecondaryBtn,vrshared::kRightStickClick,vrshared::kLeftGripPressed,vrshared::kRightTriggerAnalog,vrshared::kLeftTriggerAnalog})
             OpenXRManager::Get().SetSharedSlot(slot,0);
-        PublishMergedPacket(pState);return r;
+        PublishMergedPacket(pState,menuTrace);return r;
     }
     const auto swim=cvr::swimming::UpdateInput(vr,vr.leftThumbY<-.2f || pState->Gamepad.sThumbLY<-6553);
     const bool inWater=cvr::swimming::Active();
@@ -399,9 +443,9 @@ DWORD WINAPI HookedXInputGetState(DWORD dwUserIndex, XINPUT_STATE* pState) {
         OpenXRManager::Get().SetSharedSlot(vrshared::kLeftSecondaryBtn, 0.0f);
         OpenXRManager::Get().SetSharedSlot(vrshared::kRightStickClick, 0.0f);
         OpenXRManager::Get().SetSharedSlot(vrshared::kLeftGripPressed, 0.0f);
-        OpenXRManager::Get().SetSharedSlot(vrshared::kRightTriggerAnalog, vr.rightTrigger);
+        OpenXRManager::Get().SetSharedSlot(vrshared::kRightTriggerAnalog, rawRightTrigger);
         OpenXRManager::Get().SetSharedSlot(vrshared::kLeftTriggerAnalog, vr.leftTrigger);
-        PublishMergedPacket(pState);
+        PublishMergedPacket(pState,menuTrace);
         return r;
     }
 
@@ -648,7 +692,7 @@ DWORD WINAPI HookedXInputGetState(DWORD dwUserIndex, XINPUT_STATE* pState) {
     OpenXRManager::Get().SetSharedSlot(30, (vr.rightTrigger > 0.5f) ? 1.0f : 0.0f);
     // ...and the same trigger as an ANALOG value, which a flag cannot stand in for: an action worked progressively
     // needs the whole travel, not the half-way mark. The physical reload rides a revolver's hammer on it.
-    OpenXRManager::Get().SetSharedSlot(vrshared::kRightTriggerAnalog, vr.rightTrigger);
+    OpenXRManager::Get().SetSharedSlot(vrshared::kRightTriggerAnalog, rawRightTrigger);
     // Right grip is published as a BINARY pressed/not-pressed flag in shared[49] (a previously free
     // slot — [50]/[51]/[52] are owned by the camera-trace producer and we were stomping on them).
     // The CET hand-to-holster mod reads this + the IN-GAME wrist-to-hip distances the plugin
@@ -1271,7 +1315,7 @@ DWORD WINAPI HookedXInputGetState(DWORD dwUserIndex, XINPUT_STATE* pState) {
     }
     pState->Gamepad.wButtons |= synthButtons;
 
-    PublishMergedPacket(pState);
+    PublishMergedPacket(pState,menuTrace);
     return r;
 }
 
@@ -1312,6 +1356,12 @@ static int PatchXInputIat(HMODULE mod, void* newFunc, void** outOrig) {
 }
 
 bool InstallXInputHook() {
+    // The worker installs this before its delayed engine-pattern pass; the Boot
+    // registry retains a retry if startup could not find an import. Never chain
+    // the hook back to itself when that later registry pass arrives.
+    static std::mutex installMutex;
+    std::lock_guard lock(installMutex);
+    if (g_xinputHooked) return true;
     // Make sure an XInput DLL is resolvable so a not-yet-bound import is live and
     // the GetProcAddress fallback below works. Not fatal if absent -- the IAT
     // match is by name, independent of which XInput variant the game imports.

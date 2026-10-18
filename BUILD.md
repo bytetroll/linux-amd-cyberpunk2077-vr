@@ -83,7 +83,7 @@ ctest --test-dir build-host --output-on-failure
 
 The tests fetch only the pinned OpenXR headers. To reuse headers already downloaded by the plugin build, add `-DCPVR_TEST_OPENXR_INCLUDE_DIR="$PWD/build-win/_deps/openxr-src/include"` to configure.
 
-The Linux x86-64 suite contains 37 CTest entries covering rendering math, settings-resolution branch replay, layer diagnostics, body rotation, assembly-source parity, and the grenade and quaternion-return regressions. The two belt fixtures also run directly:
+The Linux x86-64 suite contains 40 CTest entries covering rendering math, settings-resolution branch replay, layer diagnostics, body rotation and tracking recovery, menu input, queue handoffs, assembly-source parity, and the grenade and quaternion-return regressions. The two belt fixtures also run directly:
 
 ```sh
 python3 tools/belt_tests/run_grenade_hold.py

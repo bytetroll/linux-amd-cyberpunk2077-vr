@@ -7,6 +7,7 @@
 #include <atomic>
 extern "C" int CyberpunkVR_BindPoseToImage;
 #include "Runtimes/OpenXRManager.hpp"
+#include "Runtimes/XrQueueBridge.hpp"
 #include "Camera/ImagePoseIdentity.hpp"
 #include "Camera/ImagePoseMath.hpp"
 #include "Camera/CameraState.hpp"
@@ -1453,6 +1454,9 @@ bool OpenXRManager::EnsureMonoSubmitResources() {
         return true;
     }
 
+    // A format/size rebuild retires both submitted app writes and runtime
+    // handoffs before destroying swapchains, command allocators or their fence.
+    if(!m_eyeSwapchains.empty() && !cvr::xr::DrainQueueBridge())return false;
     for (auto& eye : m_eyeSwapchains) {
         if (eye.handle != XR_NULL_HANDLE) {
             xrDestroySwapchain(eye.handle);

@@ -15,9 +15,12 @@ Included Linux/AMD work:
 - Validation of unavailable/non-finite grenade bone poses before item transforms.
 - Focused OpenXR frame-phase, layer and body-pose diagnostics.
 - A version-guarded Proton OpenXR workaround and a source patch for mixed projection/quad layer allocation.
+- Early controller-input initialization and right-trigger confirmation in native menus.
+- Recovery of an active body follow after brief tracking loss.
+- A separate OpenXR runtime queue on Proton/SteamVR, with explicit synchronization to the game queue.
 - A Linux cross-build and focused regression tests.
 
-**Remaining issues:** uneven VR frame delivery, SteamVR void/fade during fast head turns, and some body/head desynchronization. Measurements attribute most long submission cycles to swapchain-release waits on the shared game queue. Queue isolation is not implemented in this candidate. Native frame generation is disabled for the Linux/AMD build; ray/path tracing and other hardware combinations are not validated here.
+**Remaining issues:** uneven VR frame delivery, SteamVR void/fade during fast head turns, and some body/head desynchronization. Measurements attribute most long submission cycles to swapchain-release waits on the shared game queue. The latest menu, body-recovery and runtime-queue changes are undergoing headset validation; their real-world improvement is not yet measured. Native frame generation is disabled for the Linux/AMD build; ray/path tracing and other hardware combinations are not validated here.
 
 ## Getting started
 

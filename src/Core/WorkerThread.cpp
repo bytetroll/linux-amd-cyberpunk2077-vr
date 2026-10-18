@@ -46,8 +46,16 @@ extern "C" __declspec(dllexport) extern uint64_t CyberpunkVR_DebugPatchCamVrcam;
 #include "Camera/CameraLink.hpp"
 #include "Hooks/Hook.hpp"
 
+extern bool InstallXInputHook();
+
 DWORD WINAPI WorkerThread(LPVOID) {
-    if (g_verboseLog) Log("Worker thread started, waiting 8 seconds...\n");
+    // Input only patches loaded XInput imports; it does not need the delayed
+    // engine-pattern pass. Read the opt-out first, then make splash-screen input
+    // available as soon as OpenXR publishes its first controller snapshot.
+    EnsureLiveControlFileExists();
+    PollLiveControls();
+    if (g_liveControls.xrXInputInstall != 0) InstallXInputHook();
+    if (g_verboseLog) Log("Worker input ready, waiting 8 seconds before engine hooks...\n");
     if (g_backendModulePath[0] != '\0') {
         if (g_verboseLog) Log("Backend module loaded from: %s\n", g_backendModulePath);
     }

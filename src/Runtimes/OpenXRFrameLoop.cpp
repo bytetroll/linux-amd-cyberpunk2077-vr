@@ -5,6 +5,7 @@
 // Split verbatim from openxr_manager.cpp; this is an OpenXRManager method. Shared
 // module state/helpers come from openxr_internal.h (inline, single instance).
 #include "Runtimes/OpenXRManager.hpp"
+#include "Runtimes/XrQueueBridge.hpp"
 #include "Camera/ImagePoseIdentity.hpp"
 #include "Runtimes/RoomscaleTracking.hpp"
 #include "Runtimes/SimulatorRecenter.hpp"
@@ -1325,7 +1326,7 @@ DWORD OpenXRManager::FrameThreadMain() {
             m_menuClock.Reset();
             m_menuEyeAnchorValid = false;
         }
-        const bool monoReady = monoEnabled && EnsureMonoSubmitResources() && !m_eyeSwapchains.empty();
+        const bool monoReady = monoEnabled && !cvr::xr::QueueBridgeFailed() && EnsureMonoSubmitResources() && !m_eyeSwapchains.empty();
         if (monoReady && !m_views.empty()) {
             XrViewLocateInfo viewLocateInfo{XR_TYPE_VIEW_LOCATE_INFO};
             viewLocateInfo.viewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
@@ -1774,14 +1775,14 @@ DWORD OpenXRManager::FrameThreadMain() {
 
                     // -- Gameplay inputs (trigger/grip/stick/buttons) --
                     if (m_thumbstickAction == XR_NULL_HANDLE) continue;
-                    auto getFloat = [&](XrAction a) -> float {
+                    auto getFloat = [&](XrAction a, bool* activeOut = nullptr) -> float {
                         XrActionStateGetInfo gi{XR_TYPE_ACTION_STATE_GET_INFO};
                         gi.action = a;
                         gi.subactionPath = m_handPaths[i];
                         XrActionStateFloat st{XR_TYPE_ACTION_STATE_FLOAT};
-                        if (XR_SUCCEEDED(xrGetActionStateFloat(m_session, &gi, &st)) && st.isActive)
-                            return st.currentState;
-                        return 0.0f;
+                        const bool active = XR_SUCCEEDED(xrGetActionStateFloat(m_session, &gi, &st)) && st.isActive;
+                        if (activeOut) *activeOut = active && syncRes == XR_SUCCESS;
+                        return active ? st.currentState : 0.0f;
                     };
                     auto getBool = [&](XrAction a) -> bool {
                         XrActionStateGetInfo gi{XR_TYPE_ACTION_STATE_GET_INFO};
@@ -1806,7 +1807,8 @@ DWORD OpenXRManager::FrameThreadMain() {
                         }
                     };
 
-                    const float trig = getFloat(m_triggerAction);
+                    bool triggerActive = false;
+                    const float trig = getFloat(m_triggerAction, &triggerActive);
                     const float grip = getFloat(m_gripAction);
                     float sx = 0.0f, sy = 0.0f;
                     getVec2(m_thumbstickAction, sx, sy);
@@ -1858,6 +1860,7 @@ DWORD OpenXRManager::FrameThreadMain() {
                         leftStickClicked = sclick;
                     } else {
                         ctrl.rightTrigger = trig;
+                        ctrl.rightTriggerActive = triggerActive;
                         ctrl.rightGrip    = grip;
                         ctrl.rightThumbX  = sx;
                         ctrl.rightThumbY  = sy;
@@ -2138,6 +2141,7 @@ DWORD OpenXRManager::FrameThreadMain() {
                     bool useDepthLayer = monoHasDepth && m_depthLayerSupported;
                     std::vector<bool> acquiredEyes(viewCountOutput, false);
                     std::vector<bool> acquiredDepthEyes(viewCountOutput, false);
+                    std::vector<bool> waitedEyes(viewCountOutput, false),waitedDepthEyes(viewCountOutput, false);
                     std::vector<XrCompositionLayerProjectionView> projectionViews(viewCountOutput);
                     std::vector<XrCompositionLayerDepthInfoKHR> depthInfos;
                     for (uint32_t i = 0; i < viewCountOutput; ++i) {
@@ -2166,7 +2170,7 @@ DWORD OpenXRManager::FrameThreadMain() {
                         XrSwapchainImageWaitInfo waitSwapchainInfo{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
                         waitSwapchainInfo.timeout = 200000000; // 200 ms (was XR_INFINITE_DURATION): never hang the frame loop
                         const XrResult waitRes = phaseCycle.Measure(eye == 0 ? XrPhase::Wait0 : XrPhase::Wait1, [&] {
-                            return xrWaitSwapchainImage(m_eyeSwapchains[eye].handle, &waitSwapchainInfo);
+                            return cvr::xr::WaitSwapchainImage(m_eyeSwapchains[eye].handle, &waitSwapchainInfo);
                         });
                         if (XR_FAILED(waitRes) || waitRes == XR_TIMEOUT_EXPIRED) {
                             Log("OpenXRManager: xrWaitSwapchainImage failed/timeout for eye %u (res=%d)\n", eye, waitRes);
@@ -2174,6 +2178,7 @@ DWORD OpenXRManager::FrameThreadMain() {
                             break;
                         }
 
+                        waitedEyes[eye]=true;
                         ID3D12Resource* texture = m_eyeSwapchains[eye].images[imageIndex].texture;
                         if (!texture) {
                             Log("OpenXRManager: XR swapchain texture missing for eye %u image %u\n", eye, imageIndex);
@@ -2491,7 +2496,7 @@ DWORD OpenXRManager::FrameThreadMain() {
                             // acquired image is released by the cleanup loop below).
                             waitInfo.timeout = 100000000; // 100 ms
                             const XrResult waitRes = phaseCycle.Measure(eye == 0 ? XrPhase::Wait0 : XrPhase::Wait1, [&] {
-                                return xrWaitSwapchainImage(m_eyeSwapchains[eye].depthHandle, &waitInfo);
+                                return cvr::xr::WaitSwapchainImage(m_eyeSwapchains[eye].depthHandle, &waitInfo);
                             });
                             if (waitRes != XR_SUCCESS) {
                                 Log("OpenXRManager: [DEPTH] mono depth image not ready eye=%u res=%d -> skip depth this frame\n", eye, waitRes);
@@ -2499,6 +2504,7 @@ DWORD OpenXRManager::FrameThreadMain() {
                                 break;
                             }
 
+                            waitedDepthEyes[eye]=true;
                             ID3D12Resource* depthTexture = m_eyeSwapchains[eye].depthImages[depthImageIndex].texture;
                             if (!depthTexture) {
                                 Log("OpenXRManager: [DEPTH] depth swapchain texture missing for eye %u image %u\n", eye, depthImageIndex);
@@ -2571,6 +2577,34 @@ DWORD OpenXRManager::FrameThreadMain() {
                         }
                     }
 
+                    // Submit any recorded partial copies before releasing their XR images.
+                    // Runtime handoffs use this exact fence, never a later game-queue drain.
+                    if(!cvr::xr::QueueBridgeFailed()) {
+                        if(FAILED(m_cmdList->Close()))cvr::xr::FailQueueBridge("eye command list close");
+                        else {
+                            ID3D12CommandList* cmdLists[]={m_cmdList};
+                            const bool signaled=phaseCycle.Measure(XrPhase::EyeQueue,[&] {
+                                m_d3dQueue->ExecuteCommandLists(1,cmdLists);
+                                capturedReadFence=++m_fenceValue;
+                                return cvr::xr::SignalSwapchainWork(m_d3dQueue,m_fence,capturedReadFence);
+                            });
+                            if(signaled)cvr::gpu::profile::Submitted(gpuProfile,m_d3dQueue,m_fence,capturedReadFence);
+                        }
+                    }
+                    auto releaseImage=[&](XrSwapchain swapchain,bool waited,const XrSwapchainImageReleaseInfo* info) {
+                        if(!waited) {
+                            // A timed-out acquired image cannot legally be released. If it
+                            // remains unavailable, retain it and stop submissions until restart.
+                            XrSwapchainImageWaitInfo ready{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};ready.timeout=0;
+                            const auto result=cvr::xr::WaitSwapchainImage(swapchain,&ready);
+                            if(result!=XR_SUCCESS && result!=XR_SESSION_LOSS_PENDING) {
+                                cvr::xr::FailQueueBridge("unfinished acquired eye image");
+                                return XR_ERROR_RUNTIME_FAILURE;
+                            }
+                        }
+                        return cvr::xr::ReleaseSwapchainImage(swapchain,info,m_fence,capturedReadFence);
+                    };
+
                     if (!copyReady) {
                         for (uint32_t eye = 0; eye < viewCountOutput; ++eye) {
                             if (!acquiredEyes[eye]) {
@@ -2578,7 +2612,7 @@ DWORD OpenXRManager::FrameThreadMain() {
                             }
                             XrSwapchainImageReleaseInfo releaseInfo{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
                             const XrResult releaseRes = phaseCycle.Measure(eye == 0 ? XrPhase::Release0 : XrPhase::Release1, [&] {
-                                return xrReleaseSwapchainImage(m_eyeSwapchains[eye].handle, &releaseInfo);
+                                return releaseImage(m_eyeSwapchains[eye].handle,waitedEyes[eye],&releaseInfo);
                             });
                             if (XR_FAILED(releaseRes)) {
                                 Log("OpenXRManager: xrReleaseSwapchainImage cleanup failed for eye %u (res=%d)\n", eye, releaseRes);
@@ -2590,44 +2624,99 @@ DWORD OpenXRManager::FrameThreadMain() {
                             }
                             XrSwapchainImageReleaseInfo releaseInfo{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
                             const XrResult releaseRes = phaseCycle.Measure(eye == 0 ? XrPhase::Release0 : XrPhase::Release1, [&] {
-                                return xrReleaseSwapchainImage(m_eyeSwapchains[eye].depthHandle, &releaseInfo);
+                                return releaseImage(m_eyeSwapchains[eye].depthHandle,waitedDepthEyes[eye],&releaseInfo);
                             });
                             if (XR_FAILED(releaseRes)) {
                                 Log("OpenXRManager: [DEPTH] xrReleaseSwapchainImage cleanup failed for eye %u (res=%d)\n", eye, releaseRes);
                             }
                         }
 
-                        m_cmdList->Close();
-                        // NOTE: intentionally NO m_d3dQueue->Wait on the depth-writer fence
-                        // here. Blocking the present queue on that fence deadlocks during
-                        // menu/scene loads: the game's depth-writer queue can be parked
-                        // behind its own async-compute Wait, so the fence is not reached,
-                        // the present queue stalls, and the m_fence CPU wait next present
-                        // freezes the game. The depth resolve is a REPROJECTION HINT: a
-                        // rare frame-stale/torn read is invisible, a freeze is not. So we
-                        // let the copy race (benign) instead of gating on the writer queue.
-                        (void)monoDepthFence;
-                        ID3D12CommandList* cmdLists[] = {m_cmdList};
-                        const HRESULT queueResult = phaseCycle.Measure(XrPhase::EyeQueue, [&] {
-                            m_d3dQueue->ExecuteCommandLists(1, cmdLists);
-                            ++m_fenceValue;
-                            return m_d3dQueue->Signal(m_fence, m_fenceValue);
-                        });
-                        if (SUCCEEDED(queueResult))
-                            cvr::gpu::profile::Submitted(gpuProfile, m_d3dQueue, m_fence, m_fenceValue);
-                        capturedReadFence=m_fenceValue;
+                        (void)monoDepthFence; // Depth production remains on its existing game queue.
                     } else {
-                        m_cmdList->Close();
-                        ID3D12CommandList* cmdLists[] = {m_cmdList};
-                        const HRESULT queueResult = phaseCycle.Measure(XrPhase::EyeQueue, [&] {
-                            m_d3dQueue->ExecuteCommandLists(1, cmdLists);
-                            ++m_fenceValue;
-                            return m_d3dQueue->Signal(m_fence, m_fenceValue);
-                        });
-                        if (SUCCEEDED(queueResult))
-                            cvr::gpu::profile::Submitted(gpuProfile, m_d3dQueue, m_fence, m_fenceValue);
-                        capturedReadFence=m_fenceValue;
+                        // Queue HUD/overlay copies before the first eye release. Their
+                        // release waits include the earlier eye copy, so eye releases do
+                        // not enqueue new game work or wait for an extra game frame.
+                        XrCompositionLayerProjection layerProj{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
+                        XrCompositionLayerQuad layerQuad{XR_TYPE_COMPOSITION_LAYER_QUAD};
+                        const XrCompositionLayerBaseHeader* layers[1+2*cvr::hud::ChannelCount+3] = {};
 
+                        if (menuRectActive) {
+                            layerQuad.space = m_localSpace;
+                            layerQuad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+                            layerQuad.subImage = projectionViews[0].subImage;
+
+                        // LAZY-FOLLOW panel: stays put within the dead-zone, eases
+                        // to the head past the threshold (see ComputeMenuQuadPose).
+                        layerQuad.pose = ComputeMenuQuadPose(headPoseLocated, location.pose, frameState.predictedDisplayTime);
+
+                            float quadWidth = 2.0f * 1.5f * tanf(GetMenuFov() * 3.14159f / 180.0f * 0.5f);
+                            layerQuad.size = {quadWidth, quadWidth};
+                            layers[0] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&layerQuad);
+                        } else {
+                            layerProj.space = m_localSpace;
+                            layerProj.viewCount = viewCountOutput;
+                            layerProj.views = projectionViews.data();
+                            layers[0] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&layerProj);
+                        }
+
+                        XrFrameEndInfo endInfo{XR_TYPE_FRAME_END_INFO};
+                        endInfo.displayTime = frameState.predictedDisplayTime;
+                        endInfo.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+                        const double hudStartMs = XrDiagNowMs();
+                        XrSpaceLocation hudHead{XR_TYPE_SPACE_LOCATION};
+                        XrView hudViews[2]={{XR_TYPE_VIEW},{XR_TYPE_VIEW}};
+                        XrVector3f eyeOffsets[2]{};
+                        bool hudTracked=false, hudEyes=false;
+                        if(headPoseLocated && (!menuRectActive || cvr::framegen::GetSettings().overlay)) {
+                            constexpr auto valid=XR_SPACE_LOCATION_ORIENTATION_VALID_BIT|XR_SPACE_LOCATION_POSITION_VALID_BIT;
+                            hudTracked=XR_SUCCEEDED(xrLocateSpace(m_viewSpace,m_localSpace,
+                                frameState.predictedDisplayTime,&hudHead)) && (hudHead.locationFlags&valid)==valid;
+                            XrViewLocateInfo locate{XR_TYPE_VIEW_LOCATE_INFO};
+                            locate.viewConfigurationType=XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
+                            locate.displayTime=frameState.predictedDisplayTime;locate.space=m_localSpace;
+                            XrViewState state{XR_TYPE_VIEW_STATE};uint32_t count=0;
+                            hudEyes=hudTracked && XR_SUCCEEDED(xrLocateViews(m_session,&locate,&state,2,&count,hudViews)) &&
+                                count==2 && (state.viewStateFlags&XR_VIEW_STATE_POSITION_VALID_BIT);
+                            if(hudEyes) for(int i=0;i<2;++i) eyeOffsets[i]={hudViews[i].pose.position.x-hudHead.pose.position.x,
+                                hudViews[i].pose.position.y-hudHead.pose.position.y,hudViews[i].pose.position.z-hudHead.pose.position.z};
+                        }
+                        float hudBodyYaw=0;
+                        { std::lock_guard lock(m_renderPoseMutex);
+                          if(m_basePoseSet) {const auto& q=m_basePose.orientation;
+                              hudBodyYaw=atan2f(2*(q.w*q.y+q.x*q.z),1-2*(q.x*q.x+q.y*q.y));} }
+                        hudBodyYaw+=BodyYawFollowOffset();
+                        layers[1]=m_hudQuad.Prepare(m_session,m_localSpace,m_d3dDevice,m_d3dQueue,
+                            !menuRectActive,hudTracked,hudHead.pose,GetTrackingOriginSerial(),
+                            frameState.predictedDisplayTime,hudEyes?eyeOffsets:nullptr,hudBodyYaw);
+                        if(layers[1]) layers[2]=m_hudQuad.SecondEye();
+                        endInfo.layerCount = layers[2] ? 3 : (layers[1] ? 2 : 1);
+                        if(const auto* interactions=m_interactionQuad.Prepare(m_session,m_localSpace,m_d3dDevice,m_d3dQueue,
+                            !menuRectActive,hudTracked,hudHead.pose,GetTrackingOriginSerial(),
+                            frameState.predictedDisplayTime,hudEyes?eyeOffsets:nullptr,hudBodyYaw)){
+                            layers[endInfo.layerCount++]=interactions;
+                            if(const auto* other=m_interactionQuad.SecondEye())layers[endInfo.layerCount++]=other;
+                        }
+                        if(const auto* basilisk=m_basiliskQuad.Prepare(m_session,m_localSpace,m_d3dDevice,m_d3dQueue,
+                            !menuRectActive,hudTracked,hudHead.pose,GetTrackingOriginSerial(),
+                            frameState.predictedDisplayTime,hudEyes?eyeOffsets:nullptr,hudBodyYaw)){
+                            layers[endInfo.layerCount++]=basilisk;
+                            if(const auto* other=m_basiliskQuad.SecondEye())layers[endInfo.layerCount++]=other;
+                        }
+                        if(const auto* surveillance=m_surveillanceQuad.Prepare(m_session,m_localSpace,m_d3dDevice,m_d3dQueue,
+                            !menuRectActive,hudTracked,hudHead.pose,GetTrackingOriginSerial(),
+                            frameState.predictedDisplayTime,hudEyes?eyeOffsets:nullptr,hudBodyYaw)){
+                            layers[endInfo.layerCount++]=surveillance;
+                            if(const auto* other=m_surveillanceQuad.SecondEye())layers[endInfo.layerCount++]=other;
+                        }
+                        if(const auto* metrics=m_framegenOverlay.Prepare(m_session,m_viewSpace,m_d3dDevice,m_d3dQueue,
+                            m_localSpace,hudTracked?&hudHead.pose:nullptr,GetTrackingOriginSerial(),frameState.predictedDisplayTime))
+                            layers[endInfo.layerCount++]=metrics;
+                        endInfo.layers = layers;
+                        if(const auto* panel=m_settingsPanel.Prepare(m_session,m_localSpace,m_d3dDevice,m_d3dQueue)){
+                            layers[endInfo.layerCount++]=panel;
+                            if(const auto* ray=m_settingsPanel.Ray())layers[endInfo.layerCount++]=ray;
+                        }
+                        phaseCycle.sample.ms[static_cast<unsigned>(XrPhase::Hud)] += XrDiagNowMs() - hudStartMs;
                         bool releaseOk = true;
                         for (uint32_t eye = 0; eye < viewCountOutput; ++eye) {
                             if (!acquiredEyes[eye]) {
@@ -2635,7 +2724,7 @@ DWORD OpenXRManager::FrameThreadMain() {
                             }
                             XrSwapchainImageReleaseInfo releaseInfo{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
                             const XrResult releaseRes = phaseCycle.Measure(eye == 0 ? XrPhase::Release0 : XrPhase::Release1, [&] {
-                                return xrReleaseSwapchainImage(m_eyeSwapchains[eye].handle, &releaseInfo);
+                                return releaseImage(m_eyeSwapchains[eye].handle,waitedEyes[eye],&releaseInfo);
                             });
                             if (XR_FAILED(releaseRes)) {
                                 Log("OpenXRManager: xrReleaseSwapchainImage failed for eye %u (res=%d)\n", eye, releaseRes);
@@ -2648,7 +2737,7 @@ DWORD OpenXRManager::FrameThreadMain() {
                             }
                             XrSwapchainImageReleaseInfo releaseInfo{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
                             const XrResult releaseRes = phaseCycle.Measure(eye == 0 ? XrPhase::Release0 : XrPhase::Release1, [&] {
-                                return xrReleaseSwapchainImage(m_eyeSwapchains[eye].depthHandle, &releaseInfo);
+                                return releaseImage(m_eyeSwapchains[eye].depthHandle,waitedDepthEyes[eye],&releaseInfo);
                             });
                             if (XR_FAILED(releaseRes)) {
                                 Log("OpenXRManager: [DEPTH] xrReleaseSwapchainImage failed for eye %u (res=%d)\n", eye, releaseRes);
@@ -2663,87 +2752,6 @@ DWORD OpenXRManager::FrameThreadMain() {
                         }
 
                         if (releaseOk) {
-                            XrCompositionLayerProjection layerProj{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
-                            XrCompositionLayerQuad layerQuad{XR_TYPE_COMPOSITION_LAYER_QUAD};
-                            const XrCompositionLayerBaseHeader* layers[1+2*cvr::hud::ChannelCount+3] = {};
-
-                            if (menuRectActive) {
-                                layerQuad.space = m_localSpace;
-                                layerQuad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
-                                layerQuad.subImage = projectionViews[0].subImage;
-
-                            // LAZY-FOLLOW panel: stays put within the dead-zone, eases
-                            // to the head past the threshold (see ComputeMenuQuadPose).
-                            layerQuad.pose = ComputeMenuQuadPose(headPoseLocated, location.pose, frameState.predictedDisplayTime);
-
-                                float quadWidth = 2.0f * 1.5f * tanf(GetMenuFov() * 3.14159f / 180.0f * 0.5f);
-                                layerQuad.size = {quadWidth, quadWidth};
-                                layers[0] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&layerQuad);
-                            } else {
-                                layerProj.space = m_localSpace;
-                                layerProj.viewCount = viewCountOutput;
-                                layerProj.views = projectionViews.data();
-                                layers[0] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&layerProj);
-                            }
-
-                            XrFrameEndInfo endInfo{XR_TYPE_FRAME_END_INFO};
-                            endInfo.displayTime = frameState.predictedDisplayTime;
-                            endInfo.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
-                            const double hudStartMs = XrDiagNowMs();
-                            XrSpaceLocation hudHead{XR_TYPE_SPACE_LOCATION};
-                            XrView hudViews[2]={{XR_TYPE_VIEW},{XR_TYPE_VIEW}};
-                            XrVector3f eyeOffsets[2]{};
-                            bool hudTracked=false, hudEyes=false;
-                            if(headPoseLocated && (!menuRectActive || cvr::framegen::GetSettings().overlay)) {
-                                constexpr auto valid=XR_SPACE_LOCATION_ORIENTATION_VALID_BIT|XR_SPACE_LOCATION_POSITION_VALID_BIT;
-                                hudTracked=XR_SUCCEEDED(xrLocateSpace(m_viewSpace,m_localSpace,
-                                    frameState.predictedDisplayTime,&hudHead)) && (hudHead.locationFlags&valid)==valid;
-                                XrViewLocateInfo locate{XR_TYPE_VIEW_LOCATE_INFO};
-                                locate.viewConfigurationType=XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
-                                locate.displayTime=frameState.predictedDisplayTime;locate.space=m_localSpace;
-                                XrViewState state{XR_TYPE_VIEW_STATE};uint32_t count=0;
-                                hudEyes=hudTracked && XR_SUCCEEDED(xrLocateViews(m_session,&locate,&state,2,&count,hudViews)) &&
-                                    count==2 && (state.viewStateFlags&XR_VIEW_STATE_POSITION_VALID_BIT);
-                                if(hudEyes) for(int i=0;i<2;++i) eyeOffsets[i]={hudViews[i].pose.position.x-hudHead.pose.position.x,
-                                    hudViews[i].pose.position.y-hudHead.pose.position.y,hudViews[i].pose.position.z-hudHead.pose.position.z};
-                            }
-                            float hudBodyYaw=0;
-                            { std::lock_guard lock(m_renderPoseMutex);
-                              if(m_basePoseSet) {const auto& q=m_basePose.orientation;
-                                  hudBodyYaw=atan2f(2*(q.w*q.y+q.x*q.z),1-2*(q.x*q.x+q.y*q.y));} }
-                            hudBodyYaw+=BodyYawFollowOffset();
-                            layers[1]=m_hudQuad.Prepare(m_session,m_localSpace,m_d3dDevice,m_d3dQueue,
-                                !menuRectActive,hudTracked,hudHead.pose,GetTrackingOriginSerial(),
-                                frameState.predictedDisplayTime,hudEyes?eyeOffsets:nullptr,hudBodyYaw);
-                            if(layers[1]) layers[2]=m_hudQuad.SecondEye();
-                            endInfo.layerCount = layers[2] ? 3 : (layers[1] ? 2 : 1);
-                            if(const auto* interactions=m_interactionQuad.Prepare(m_session,m_localSpace,m_d3dDevice,m_d3dQueue,
-                                !menuRectActive,hudTracked,hudHead.pose,GetTrackingOriginSerial(),
-                                frameState.predictedDisplayTime,hudEyes?eyeOffsets:nullptr,hudBodyYaw)){
-                                layers[endInfo.layerCount++]=interactions;
-                                if(const auto* other=m_interactionQuad.SecondEye())layers[endInfo.layerCount++]=other;
-                            }
-                            if(const auto* basilisk=m_basiliskQuad.Prepare(m_session,m_localSpace,m_d3dDevice,m_d3dQueue,
-                                !menuRectActive,hudTracked,hudHead.pose,GetTrackingOriginSerial(),
-                                frameState.predictedDisplayTime,hudEyes?eyeOffsets:nullptr,hudBodyYaw)){
-                                layers[endInfo.layerCount++]=basilisk;
-                                if(const auto* other=m_basiliskQuad.SecondEye())layers[endInfo.layerCount++]=other;
-                            }
-                            if(const auto* surveillance=m_surveillanceQuad.Prepare(m_session,m_localSpace,m_d3dDevice,m_d3dQueue,
-                                !menuRectActive,hudTracked,hudHead.pose,GetTrackingOriginSerial(),
-                                frameState.predictedDisplayTime,hudEyes?eyeOffsets:nullptr,hudBodyYaw)){
-                                layers[endInfo.layerCount++]=surveillance;
-                                if(const auto* other=m_surveillanceQuad.SecondEye())layers[endInfo.layerCount++]=other;
-                            }
-                            if(const auto* metrics=m_framegenOverlay.Prepare(m_session,m_viewSpace,m_d3dDevice,m_d3dQueue,
-                                m_localSpace,hudTracked?&hudHead.pose:nullptr,GetTrackingOriginSerial(),frameState.predictedDisplayTime))
-                                layers[endInfo.layerCount++]=metrics;
-                            endInfo.layers = layers;
-                            if(const auto* panel=m_settingsPanel.Prepare(m_session,m_localSpace,m_d3dDevice,m_d3dQueue)){
-                                layers[endInfo.layerCount++]=panel;
-                                if(const auto* ray=m_settingsPanel.Ray())layers[endInfo.layerCount++]=ray;
-                            }
-                            phaseCycle.sample.ms[static_cast<unsigned>(XrPhase::Hud)] += XrDiagNowMs() - hudStartMs;
                             CVR_DIAGNOSTIC(CyberpunkVR_DebugXrEnds.fetch_add(1, std::memory_order_relaxed));
                             CVR_DIAGNOSTIC(CyberpunkVR_DebugXrEndsWithLayer.fetch_add(1, std::memory_order_relaxed));
                             // HOW OLD IS THE IMAGE WE ARE SUBMITTING. Recorded here rather than at the

@@ -28,7 +28,8 @@ public:
     const XrCompositionLayerBaseHeader* SecondEye() const {
         return secondEye ? reinterpret_cast<const XrCompositionLayerBaseHeader*>(&rightLayer) : nullptr;
     }
-    void Shutdown();
+    // gpuDrained is only for the session owner after DrainQueueBridge succeeds.
+    void Shutdown(bool gpuDrained=false);
 private:
     Channel channel;
     bool Ensure(XrSession session, ID3D12Device* device, uint32_t width, uint32_t height);

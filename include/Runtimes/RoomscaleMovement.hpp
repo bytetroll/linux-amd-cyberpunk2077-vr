@@ -33,6 +33,7 @@ inline float TrackingYaw(float entityYaw, float bodyRealign) {
 class BodyTranslationFollow {
 public:
     void Reset() { m_following=false;m_velocity={}; }
+    void Pause() { m_velocity={}; }
     bool Following() const { return m_following; }
     Vec2 Step(Vec2 error,float radius,float dt) {
         if(!Finite(error) || !std::isfinite(radius) || !std::isfinite(dt) || dt<=0) {
@@ -140,32 +141,56 @@ public:
             !std::isfinite(scale) || scale < 0.05f || scale > 20.0f ||
             !std::isfinite(trackingYaw)) {
             m_active = false;
+            m_follow.Pause();
             step.reason = Reason::TrackingInvalid;
             return step;
         }
         if (nowUs < sample.stampUs || nowUs - sample.stampUs > MaxAgeUs) {
             m_active = false;
+            m_follow.Pause();
             step.reason = Reason::Stale;
             return step;
         }
         if (!allowed || !std::isfinite(dt) || dt <= 0.000001f || dt > 0.25f) {
             m_previous = sample.head;
             m_sequence = sample.sequence;
-            m_active = false;
+            Suspend();
             step.reason = Reason::Suspended;
             return step;
         }
         if (!m_active || gap) {
-            m_pending={};m_follow.Reset();
+            // A brief tracking rejection must not erase a catch-up already
+            // accepted before the rejection: the camera still subtracts only
+            // m_consumed. Dropping the remaining request strands the body even
+            // when the headset stays still. Keep that known request, with no
+            // carried velocity; never add travel that occurred while untracked.
+            const Vec2 recoveryDelta=(sample.head-m_previous)*scale;
+            const Vec2 runtimeDelta=(sample.runtimeHead-m_previousRuntime)*scale;
+            const bool runtimeJump=sample.runtimeHeadKnown && m_runtimeKnown &&
+                Dot(runtimeDelta,runtimeDelta)>MaxStepMetres*MaxStepMetres;
+            const bool discontinuity=runtimeJump || m_rebasingFilteredJump;
+            const bool resume=m_follow.Following() && m_lastValidUs && nowUs>=m_lastValidUs &&
+                nowUs-m_lastValidUs<=MaxAgeUs && Finite(recoveryDelta) &&
+                Dot(recoveryDelta,recoveryDelta)<=MaxStepMetres*MaxStepMetres && !discontinuity;
+            if(!resume) { m_pending={};m_follow.Reset(); }
+            else m_follow.Pause();
+            if(discontinuity) {
+                // Filtering can conceal a raw tracking teleport at recovery.
+                // Retire the entire filtered tail just as on the active path.
+                m_consumed=m_consumed+(sample.head-m_previous);
+                const Vec2 remaining=(sample.runtimeHead-sample.head)*scale;
+                m_rebasingFilteredJump=sample.runtimeHeadKnown && Dot(remaining,remaining)>.000001f;
+            }
             m_previous = sample.head;
             m_sequence = sample.sequence;
             m_active = true;
             m_previousRuntime = sample.runtimeHead;
             m_runtimeKnown = sample.runtimeHeadKnown;
-            m_rebasingFilteredJump = false;
-            step.reason = Reason::Baseline;
+            m_lastValidUs = nowUs;
+            step.reason = discontinuity?Reason::Discontinuity:Reason::Baseline;
             return step;
         }
+        m_lastValidUs = nowUs;
         if (sample.sequence < m_sequence ||
             (sample.sequence==m_sequence && !m_follow.Following())) {
             step.reason = Reason::Duplicate;
@@ -218,7 +243,7 @@ private:
     Vec2 m_pending{};
     BodyTranslationFollow m_follow;
     Vec2 m_previousRuntime{};
-    uint64_t m_origin{}, m_sequence{}, m_tickUs{}, m_ticket{}, m_completed{};
+    uint64_t m_origin{}, m_sequence{}, m_tickUs{}, m_lastValidUs{}, m_ticket{}, m_completed{};
     bool m_active{};
     bool m_runtimeKnown{}, m_rebasingFilteredJump{};
 };

@@ -19,7 +19,8 @@ class Panel {
 public:
     const XrCompositionLayerBaseHeader* Prepare(XrSession,XrSpace,ID3D12Device*,ID3D12CommandQueue*);
     const XrCompositionLayerBaseHeader* Ray() const;
-    void Shutdown();
+    // gpuDrained is only for the session owner after DrainQueueBridge succeeds.
+    void Shutdown(bool gpuDrained=false);
 private:
     XrSwapchain swapchain{};
     std::vector<XrSwapchainImageD3D12KHR> images;

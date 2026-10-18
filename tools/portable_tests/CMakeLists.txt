@@ -16,7 +16,7 @@ if(NOT CPVR_TEST_OPENXR_INCLUDE_DIR)
     set(CPVR_TEST_OPENXR_INCLUDE_DIR "${openxr_headers_SOURCE_DIR}/include")
 endif()
 
-foreach(test fog viewport features main sky cascade posevalidity layerdiagnostics)
+foreach(test fog viewport features main sky cascade posevalidity layerdiagnostics queuehandoff)
     add_executable(parity_${test} "../render_parity_tests/${test}.cpp")
     target_compile_features(parity_${test} PRIVATE cxx_std_20)
     target_include_directories(parity_${test} PRIVATE ../../include "${CPVR_TEST_OPENXR_INCLUDE_DIR}")
@@ -40,6 +40,16 @@ add_test(NAME grenade_hold
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/../belt_tests/run_grenade_hold.py")
 add_test(NAME thunk_source_parity
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/../check_thunk_parity.py")
+
+add_executable(roomscale_recovery ../roomscale_tests/recovery.cpp)
+target_compile_features(roomscale_recovery PRIVATE cxx_std_20)
+target_include_directories(roomscale_recovery PRIVATE ../../include)
+add_test(NAME roomscale_recovery COMMAND roomscale_recovery)
+
+add_executable(native_menu_input ../input_tests/native_menu.cpp)
+target_compile_features(native_menu_input PRIVATE cxx_std_20)
+target_include_directories(native_menu_input PRIVATE ../../include)
+add_test(NAME native_menu_input COMMAND native_menu_input)
 
 add_subdirectory(../body_rotation_tests body_rotation)
 target_include_directories(body_rotation_tests PRIVATE "${CPVR_TEST_OPENXR_INCLUDE_DIR}")

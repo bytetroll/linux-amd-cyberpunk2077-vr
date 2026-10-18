@@ -1,4 +1,5 @@
 #include "Framegen/StatsOverlay.hpp"
+#include "Runtimes/XrQueueBridge.hpp"
 #include "Framegen/Framegen.hpp"
 #include <algorithm>
 #include <array>
@@ -139,6 +140,7 @@ void Draw(Canvas c,const Settings& settings,const Statistics& stats) {
 }
 const XrCompositionLayerBaseHeader* StatsOverlay::Prepare(XrSession session,XrSpace view,ID3D12Device* device,ID3D12CommandQueue* queue,
     XrSpace local,const XrPosef* head,uint64_t origin,XrTime displayTime) {
+    if(cvr::xr::QueueBridgeFailed())return nullptr;
     const auto settings=GetSettings();
     if(!settings.overlay) {
         if(!fence || fence->GetCompletedValue()>=fenceValue)Shutdown();
@@ -173,7 +175,8 @@ const XrCompositionLayerBaseHeader* StatsOverlay::Prepare(XrSession session,XrSp
         if(!acquired) {XrSwapchainImageAcquireInfo info{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};if(XR_SUCCEEDED(xrAcquireSwapchainImage(swapchain,&info,&acquiredIndex)))acquired=true;}
         if(acquired) {
             XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};wait.timeout=0;
-            if(xrWaitSwapchainImage(swapchain,&wait)==XR_SUCCESS) {
+            if(cvr::xr::WaitSwapchainImage(swapchain,&wait)==XR_SUCCESS) {
+                uint64_t writtenValue=0;
                 const auto stats=GetStatistics();void* data{};D3D12_RANGE none{};
                 if(SUCCEEDED(upload->Map(0,&none,&data))) {
                     Draw({pixels.data(),int(width),int(height)},settings,stats);
@@ -186,12 +189,17 @@ const XrCompositionLayerBaseHeader* StatsOverlay::Prepare(XrSession session,XrSp
                         D3D12_TEXTURE_COPY_LOCATION src{},dst{};src.pResource=upload.Get();src.Type=D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
                         src.PlacedFootprint.Footprint={target->GetDesc().Format,width,height,1,rowPitch};dst.pResource=target;dst.Type=D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
                         list->CopyTextureRegion(&dst,0,0,0,&src,nullptr);std::swap(b.Transition.StateBefore,b.Transition.StateAfter);list->ResourceBarrier(1,&b);
-                        if(SUCCEEDED(list->Close())) {ID3D12CommandList* lists[]={list.Get()};queue->ExecuteCommandLists(1,lists);queue->Signal(fence.Get(),++fenceValue);published=true;nextUpdate=now+250;}
+                        if(SUCCEEDED(list->Close())) {
+                            ID3D12CommandList* lists[]={list.Get()};queue->ExecuteCommandLists(1,lists);
+                            writtenValue=++fenceValue;
+                            if(!cvr::xr::SignalSwapchainWork(queue,fence.Get(),writtenValue))return nullptr;
+                            published=true;nextUpdate=now+250;
+                        }
                     }
                 }
                 XrSwapchainImageReleaseInfo release{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
-                if(XR_FAILED(xrReleaseSwapchainImage(swapchain,&release)))published=false;
-                acquired=false;
+                if(XR_FAILED(cvr::xr::ReleaseSwapchainImage(swapchain,&release,fence.Get(),writtenValue)))published=false;
+                else acquired=false;
             }
         }
     }
@@ -221,18 +229,18 @@ const XrCompositionLayerBaseHeader* StatsOverlay::Prepare(XrSession session,XrSp
     const float w=2*distance*std::tan(angle*radians*.5f)*settings.overlayScale;
     layer.size={w,w*height/width};return reinterpret_cast<const XrCompositionLayerBaseHeader*>(&layer);
 }
-void StatsOverlay::Shutdown(bool wait) {
+void StatsOverlay::Shutdown(bool wait,bool gpuDrained) {
     if(!swapchain && !fence && pixels.empty())return;
-    if(wait && fence && fence->GetCompletedValue()<fenceValue) {
+    if(!gpuDrained && wait && fence && fence->GetCompletedValue()<fenceValue) {
         const auto event=CreateEventW(nullptr,FALSE,FALSE,nullptr);
         if(event) {if(SUCCEEDED(fence->SetEventOnCompletion(fenceValue,event)))WaitForSingleObject(event,1000);CloseHandle(event);}
     }
-    if(fence && fence->GetCompletedValue()<fenceValue)return;
-    if(acquired && swapchain) {
+    if(!gpuDrained && fence && fence->GetCompletedValue()<fenceValue)return;
+    if(!gpuDrained && acquired && swapchain) {
         XrSwapchainImageWaitInfo ready{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};ready.timeout=0;
-        if(xrWaitSwapchainImage(swapchain,&ready)!=XR_SUCCESS)return;
+        if(cvr::xr::WaitSwapchainImage(swapchain,&ready)!=XR_SUCCESS)return;
         XrSwapchainImageReleaseInfo release{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
-        if(XR_FAILED(xrReleaseSwapchainImage(swapchain,&release)))return;
+        if(XR_FAILED(cvr::xr::ReleaseSwapchainImage(swapchain,&release)))return;
         acquired=false;
     }
     if(swapchain) {xrDestroySwapchain(swapchain);swapchain=XR_NULL_HANDLE;}

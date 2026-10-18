@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 project(HudSubmitTests LANGUAGES CXX)
 enable_testing()
-add_executable(hud_submit_tests main.cpp ../../src/Runtimes/HudQuad.cpp)
+add_executable(hud_submit_tests main.cpp ../../src/Runtimes/HudQuad.cpp ../../src/Runtimes/XrQueueBridge.cpp)
 target_include_directories(hud_submit_tests PRIVATE ../../include ../../build/_deps/openxr-src/include)
 target_compile_features(hud_submit_tests PRIVATE cxx_std_20)
 target_compile_definitions(hud_submit_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN XR_USE_PLATFORM_WIN32 XR_USE_GRAPHICS_API_D3D12)

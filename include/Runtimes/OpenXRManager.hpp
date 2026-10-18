@@ -61,6 +61,8 @@ struct VRControllerState {
     float    rightGrip    = 0.0f;
     bool     leftHandValid  = false;
     bool     rightHandValid = false;
+    // Input availability is independent of the controller's tracked pose.
+    bool     rightTriggerActive = false;
 };
 
 extern "C" int GetXrRuntimeMode();

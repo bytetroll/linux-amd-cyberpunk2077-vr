@@ -14,7 +14,8 @@ class StatsOverlay {
 public:
     const XrCompositionLayerBaseHeader* Prepare(XrSession,XrSpace,ID3D12Device*,ID3D12CommandQueue*,
         XrSpace local=XR_NULL_HANDLE,const XrPosef* head=nullptr,uint64_t origin=0,XrTime displayTime=0);
-    void Shutdown(bool wait=false);
+    // gpuDrained is only for the session owner after DrainQueueBridge succeeds.
+    void Shutdown(bool wait=false,bool gpuDrained=false);
 private:
     XrSwapchain swapchain{};
     std::vector<XrSwapchainImageD3D12KHR> images;

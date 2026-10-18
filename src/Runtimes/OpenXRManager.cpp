@@ -3,6 +3,7 @@
 #include "Runtimes/HybridBodyYaw.hpp"
 #include "Anim/WheelGrab.hpp"   // the wheel-grab blends, for the hand smoothing below
 #include "Runtimes/OpenXRManager.hpp"
+#include "Runtimes/XrQueueBridge.hpp"
 #include "Hooks/RoomscaleMove.hpp"
 #include "Camera/CameraLink.hpp"
 #include "Runtimes/SimulatorRecenter.hpp"
@@ -942,7 +943,9 @@ bool OpenXRManager::InitGraphics(ID3D12Device* device, ID3D12CommandQueue* queue
 
     m_graphicsBinding.type = XR_TYPE_GRAPHICS_BINDING_D3D12_KHR;
     m_graphicsBinding.device = device;
-    m_graphicsBinding.queue = queue;
+    m_graphicsBinding.queue = cvr::xr::InitializeQueueBridge(device,queue,
+        m_runtimeIsSteamVR.load(std::memory_order_relaxed));
+    if(!m_graphicsBinding.queue){cvr::xr::ShutdownQueueBridge();return false;}
 
     LogDxgiAdapterForDevice(device);
 
@@ -953,6 +956,7 @@ bool OpenXRManager::InitGraphics(ID3D12Device* device, ID3D12CommandQueue* queue
     XrResult res = xrCreateSession(m_instance, &sessionInfo, &m_session);
     if (XR_FAILED(res)) {
         Log("OpenXRManager: Failed to create XrSession (res=%d)\n", res);
+        cvr::xr::ShutdownQueueBridge();
         return false;
     }
 
@@ -2203,10 +2207,12 @@ void OpenXRManager::Shutdown() {
         if (waitResult != WAIT_OBJECT_0) {
             Log("OpenXRManager: WARNING submit thread did not stop during shutdown (wait=%lu).\n",
                 waitResult);
+            return; // Keep the live thread's session, queues and fences intact.
         }
         CloseHandle(m_frameThread);
         m_frameThread = nullptr;
     }
+    if(!cvr::xr::DrainQueueBridge())return;
 
     // ---- OPENXR OBJECTS, IN DEPENDENCY ORDER -----------------------------------------------------
     //
@@ -2215,13 +2221,13 @@ void OpenXRManager::Shutdown() {
     // the swapchains afterwards -- i.e. it handed the runtime handles whose parent was already gone.
     // (dabinn, TofuExpress fbe336fa)
     m_framegen.Reset();
-    m_framegenOverlay.Shutdown(true);
-    m_settingsPanel.Shutdown();
+    m_framegenOverlay.Shutdown(true,true);
+    m_settingsPanel.Shutdown(true);
     cvr::framegen::StopHardwareTelemetry();
-    m_hudQuad.Shutdown();
-    m_interactionQuad.Shutdown();
-    m_basiliskQuad.Shutdown();
-    m_surveillanceQuad.Shutdown();
+    m_hudQuad.Shutdown(true);
+    m_interactionQuad.Shutdown(true);
+    m_basiliskQuad.Shutdown(true);
+    m_surveillanceQuad.Shutdown(true);
     cvr::hud::Shutdown();
     cvr::hud::Shutdown(cvr::hud::Channel::Interaction);
     cvr::hud::Shutdown(cvr::hud::Channel::Basilisk);
@@ -2260,9 +2266,13 @@ void OpenXRManager::Shutdown() {
     }
 
     if (m_session != XR_NULL_HANDLE) {
-        xrDestroySession(m_session);
+        if(XR_FAILED(xrDestroySession(m_session))) {
+            Log("OpenXRManager: Session destruction failed; retaining graphics queue references.\n");
+            return;
+        }
         m_session = XR_NULL_HANDLE;
     }
+    cvr::xr::ShutdownQueueBridge();
     if (m_actionSet != XR_NULL_HANDLE) {
         xrDestroyActionSet(m_actionSet);
         m_actionSet = XR_NULL_HANDLE;

@@ -1,4 +1,5 @@
 #include "Overlay/VrPanel.hpp"
+#include "Runtimes/XrQueueBridge.hpp"
 #include "Camera/ImagePoseIdentity.hpp"
 #include <array>
 #include <mutex>
@@ -33,6 +34,7 @@ void PublishCanvas(const std::shared_ptr<Canvas>& c,ID3D12Fence* f,uint64_t valu
 void ClearCanvas(){std::lock_guard lock(canvasMutex);latest.reset();for(auto& p:pool)if(p && p.use_count()==1 && (!p->fence || p->fence->GetCompletedValue()>=p->value))p.reset();}
 const XrCompositionLayerBaseHeader* Panel::Prepare(XrSession session,XrSpace space,ID3D12Device* device,ID3D12CommandQueue* queue){
     rayVisible=false;
+    if(cvr::xr::QueueBridgeFailed())return nullptr;
     if(!Visible()){Shutdown();return nullptr;}
     const auto view=GetView();if(!view.valid || !device || !queue)return nullptr;
     std::shared_ptr<Canvas> source;{std::lock_guard lock(canvasMutex);source=latest;}
@@ -59,17 +61,21 @@ const XrCompositionLayerBaseHeader* Panel::Prepare(XrSession session,XrSpace spa
         if(lastSerial!=source->serial || acquired){
             if(!acquired){XrSwapchainImageAcquireInfo a{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};if(XR_SUCCEEDED(xrAcquireSwapchainImage(swapchain,&a,&index)))acquired=true;}
             if(acquired){XrSwapchainImageWaitInfo w{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};w.timeout=0;
-                if(xrWaitSwapchainImage(swapchain,&w)==XR_SUCCESS){
+                if(cvr::xr::WaitSwapchainImage(swapchain,&w)==XR_SUCCESS){
+                    uint64_t writtenValue=0;
                     if(SUCCEEDED(allocator->Reset()) && SUCCEEDED(list->Reset(allocator.Get(),nullptr)) &&
                        blit.EnsureInitialized(device,DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,CanvasWidth,CanvasHeight) &&
                        blit.RecordOverlay(list.Get(),source->texture.Get(),images[index].texture,4) && SUCCEEDED(list->Close())){
                         std::lock_guard submit(cvr::camera::ImageSubmissionMutex());
                         ID3D12CommandList* commands[]={list.Get()};queue->ExecuteCommandLists(1,commands);
                         flight=source;
-                        if(SUCCEEDED(queue->Signal(fence.Get(),++fenceValue))){lastSerial=source->serial;published=true;}
+                        writtenValue=++fenceValue;
+                        if(!cvr::xr::SignalSwapchainWork(queue,fence.Get(),writtenValue))return nullptr;
+                        lastSerial=source->serial;published=true;
                     }
                     XrSwapchainImageReleaseInfo release{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
-                    if(XR_FAILED(xrReleaseSwapchainImage(swapchain,&release)))published=false;acquired=false;
+                    if(XR_FAILED(cvr::xr::ReleaseSwapchainImage(swapchain,&release,fence.Get(),writtenValue)))published=false;
+                    else acquired=false;
                 }
             }
         }
@@ -97,10 +103,10 @@ const XrCompositionLayerBaseHeader* Panel::Prepare(XrSession session,XrSpace spa
     return reinterpret_cast<const XrCompositionLayerBaseHeader*>(&layer);
 }
 const XrCompositionLayerBaseHeader* Panel::Ray() const{return rayVisible?reinterpret_cast<const XrCompositionLayerBaseHeader*>(&ray):nullptr;}
-void Panel::Shutdown(){
-    if(fence && fence->GetCompletedValue()<fenceValue)return;
-    if(acquired && swapchain){XrSwapchainImageWaitInfo w{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};w.timeout=0;if(xrWaitSwapchainImage(swapchain,&w)!=XR_SUCCESS)return;
-        XrSwapchainImageReleaseInfo r{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};if(XR_FAILED(xrReleaseSwapchainImage(swapchain,&r)))return;acquired=false;}
+void Panel::Shutdown(bool gpuDrained){
+    if(!gpuDrained && fence && fence->GetCompletedValue()<fenceValue)return;
+    if(!gpuDrained && acquired && swapchain){XrSwapchainImageWaitInfo w{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};w.timeout=0;if(cvr::xr::WaitSwapchainImage(swapchain,&w)!=XR_SUCCESS)return;
+        XrSwapchainImageReleaseInfo r{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};if(XR_FAILED(cvr::xr::ReleaseSwapchainImage(swapchain,&r)))return;acquired=false;}
     if(swapchain)xrDestroySwapchain(swapchain);swapchain={};images.clear();flight.reset();allocator.Reset();list.Reset();fence.Reset();
     fenceValue=lastSerial=0;published=rayVisible=false;ClearCanvas();
 }
