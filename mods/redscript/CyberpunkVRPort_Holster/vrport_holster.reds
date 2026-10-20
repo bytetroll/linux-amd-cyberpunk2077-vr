@@ -77,9 +77,17 @@ public func VREquipWeaponSlot3() -> Void {
 }
 
 // Unequip a RANGED weapon — same as the vanilla holster button. UnequipWeapon politely tells the
-// active weapon's state machine to holster; that works for guns.
+// active weapon's state machine to holster; that works for guns. Also removes from the left carry
+// slot, because a heavy ranged weapon carried there (rifle, sniper) would otherwise stay attached.
 @addMethod(PlayerPuppet)
 public func VRUnequipWeapon() -> Void {
+  let ts = GameInstance.GetScriptableSystemsContainer(this.GetGame()).Get(n"TransactionSystem") as TransactionSystem;
+  if IsDefined(ts) {
+    let leftSlot = TDBID.Create(n"AttachmentSlots.WeaponLeft");
+    if IsDefined(ts.GetItemInSlot(this, leftSlot)) {
+      ts.RemoveItemFromSlot(this, leftSlot, false);
+    }
+  }
   this.VRSendEquipRequest(EquipmentManipulationAction.UnequipWeapon);
 }
 
@@ -94,9 +102,23 @@ public func VRUnequipWeapon() -> Void {
 // VR motion-melee picks up as a swing and fires a melee attack — that puts melee into an attack/busy
 // state, and a same-frame UnequipWeapon is rejected. A gun never swings, so its unequip goes through.
 // Fix: stamp a holster-intent time so VRMeleeBladeHit suppresses the swing for ~1s, THEN unequip.
+// ALSO REMOVE THE WEAPON FROM THE LEFT SLOT: the carry system moves a heavy weapon to
+// AttachmentSlots.WeaponLeft (CyberpunkVR_CarryLeft = 1) and the native UnequipWeapon only removes
+// from the right slot — so a katana carried in the left hand stays there after the request.
 @addMethod(PlayerPuppet)
 public func VRHolsterMelee() -> Void {
   this.m_vrHolsterIntentTime = EngineTime.ToFloat(GameInstance.GetSimTime(this.GetGame()));
+  // Remove from the left carry slot first, so the EquipmentSystem request does not find it there.
+  // The weapon is the same entity (shouldDestroyEntity=false), so this is just un-attaching it from
+  // the left hand. With nothing in either slot the EquipmentSystem's UnequipWeapon is a no-op, but
+  // it still fires the holster animation and sound — the real work is the detachment above.
+  let ts = GameInstance.GetScriptableSystemsContainer(this.GetGame()).Get(n"TransactionSystem") as TransactionSystem;
+  if IsDefined(ts) {
+    let leftSlot = TDBID.Create(n"AttachmentSlots.WeaponLeft");
+    if IsDefined(ts.GetItemInSlot(this, leftSlot)) {
+      ts.RemoveItemFromSlot(this, leftSlot, false);
+    }
+  }
   this.VRSendEquipRequest(EquipmentManipulationAction.UnequipWeapon);
 }
 

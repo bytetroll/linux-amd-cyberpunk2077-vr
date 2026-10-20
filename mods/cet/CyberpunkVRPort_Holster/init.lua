@@ -125,12 +125,19 @@ registerForEvent('onUpdate', function(dt)
     end
     if not zone then return end
 
-    -- Reliable "is a weapon in the right hand": read the WeaponRight slot directly. GetActiveWeapon()
-    -- can return null / lag for a melee weapon right after an equip (or while it's in a lowered state),
-    -- which would wrongly reset lastZone and send us into the RE-EQUIP branch instead of holstering —
-    -- exactly the "it equips again instead of putting away" the katana shows.
+    -- Reliable "is a weapon in hand": check both the right and left attachment slots.
+    -- GetActiveWeapon() can return null / lag for a melee weapon right after an equip (or while it's
+    -- in a lowered state), which would wrongly reset lastZone and send us into the RE-EQUIP branch
+    -- instead of holstering — exactly the "it equips again instead of putting away" the katana shows.
+    -- THE LEFT SLOT IS CHECKED TOO: the weapon carry system moves a heavy weapon (katana, rifle) to
+    -- AttachmentSlots.WeaponLeft while the left hand holds it (CyberpunkVR_CarryLeft = 1). A weapon
+    -- there is still "in hand" for holster purposes — reaching to the left hip should put it away.
+    local WeaponLeftSlot = TweakDBID.new("AttachmentSlots.WeaponLeft")
     local rightItem = TransactionSystem:GetItemInSlot(pl, WeaponRightSlot)
-    local hasWeapon = rightItem ~= nil
+    local leftItem  = TransactionSystem:GetItemInSlot(pl, WeaponLeftSlot)
+    local hasWeapon = (rightItem ~= nil) or (leftItem ~= nil)
+    -- Prefer the right item for classification; if it is nil, the left item is the one in hand.
+    local heldItem = rightItem or leftItem
 
     -- shared[23]: 0/unset = immersive (classify by visual holster), 1 = simple slot mapping.
     -- (Inverted on the plugin side so the zero-initialised shared block defaults to immersive.)
@@ -146,7 +153,7 @@ registerForEvent('onUpdate', function(dt)
         spdlog.info(string.format("[Holster] simple grip zone=%s dR=%.2f dL=%.2f dB=%.2f hasWpn=%s",
             tostring(zone), dR, dL, dB, tostring(hasWeapon)))
         if hasWeapon then
-            local isMelee = (classify(TDBID.ToStringDEBUG(rightItem:GetItemID():GetTDBID())) == "melee")
+            local isMelee = (classify(TDBID.ToStringDEBUG(heldItem:GetItemID():GetTDBID())) == "melee")
             if isMelee then pl:VRHolsterMelee() else pl:VRUnequipWeapon() end
             lastZone = nil
             spdlog.info("[Holster] simple -> HOLSTER")
@@ -186,7 +193,7 @@ registerForEvent('onUpdate', function(dt)
         -- Melee uses VRHolsterMelee: it suppresses the VR swing (so reaching to the holster doesn't fire
         -- an attack that blocks the unequip) and then sends the same UnequipWeapon the keyboard B does.
         -- Ranged never swings, so the plain UnequipWeapon already works for it.
-        local isMelee = (classify(TDBID.ToStringDEBUG(rightItem:GetItemID():GetTDBID())) == "melee")
+        local isMelee = (classify(TDBID.ToStringDEBUG(heldItem:GetItemID():GetTDBID())) == "melee")
         if isMelee then pl:VRHolsterMelee() else pl:VRUnequipWeapon() end
         lastZone = nil
         spdlog.info("[Holster] -> HOLSTER (held weapon)")

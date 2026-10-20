@@ -763,13 +763,28 @@ local function carryTick(dt)
     -- weapon plane and the game re-asserts it on a shot or a zoom; nothing here touches the camera to
     -- force that, on the user's call. Left as it is until a mechanism turns up that does not.
     -- THE SLOT IS CLEAN WHENEVER NOTHING HANGS ON IT. Catches the abnormal exits: holstered mid-carry,
-    -- a load, a mod reload, a reload module that took the weapon.
+    -- a load, a mod reload, a reload module that took the weapon, or the player holstering through the
+    -- hand-to-holster mod while the weapon is in the left hand. In all cases the carry flag must come
+    -- down with it, or the right trigger stays dead (SetVRCarryLeft = 1 suppresses RT in XInput.cpp).
     if not rFresh then
-        if ts:GetItemInSlot(pl, LEFT) == nil then
+        local leftItem = ts:GetItemInSlot(pl, LEFT)
+        if leftItem == nil then
+            if carryOn then
+                -- The weapon vanished from the left slot without the carry return path (holster,
+                -- unequip, reload module). Tear down carry state so the next weapon starts clean.
+                carryOn = false
+                carryItemID = nil
+                carryLeftSlot = nil
+                carryGrip = nil
+                carryW = 0.0
+                carryV = 0.0
+                carryHoming = false
+                if type(SetVRCarryLeft) == 'function' then pcall(function() SetVRCarryLeft(0) end) end
+                logAlways('carry: left slot empty (external unequip) -- full reset')
+            end
             local cur = slotGetRel('WeaponLeft')
             if cur and (math.abs(cur.x) + math.abs(cur.y) + math.abs(cur.z)) > 0.0005 then
                 slotSetRel('WeaponLeft', 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0)
-                logAlways('carry: left slot empty but displaced -- reset')
             end
         end
         return

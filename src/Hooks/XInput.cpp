@@ -91,7 +91,7 @@ extern "C" __declspec(dllexport) float CyberpunkVR_MoveWalkMargin = 0.06f;
 
 // SCANNER GESTURE -- left hand at the left ear + right stick click held = the scanner is held.
 extern "C" __declspec(dllexport) int32_t CyberpunkVR_ScannerGesture = 1;
-// The ear, in HMD-LOCAL XR axes (x right, y up, z BACKWARD -- the published hand position is in the
+// THE EAR, in HMD-LOCAL XR axes (x right, y up, z BACKWARD -- the published hand position is in the
 // headset's own frame, so this rides the head and works whichever way the player faces). Slightly left,
 // a little below eye level and a little behind the eyes: where a hand goes when it cups an ear.
 extern "C" __declspec(dllexport) float CyberpunkVR_ScannerEarX = -0.10f;
@@ -111,6 +111,10 @@ extern "C" __declspec(dllexport) int32_t CyberpunkVR_ScannerExitMs  = 250;
 // latch and the port keeps LB asserted itself: squeeze at the ear to open, squeeze at the ear again
 // to close, hand free in between. 0 restores the original hold.
 extern "C" __declspec(dllexport) int32_t CyberpunkVR_ScannerToggle = 1;
+// DUAL-Grip SCANNER: both grips together open the scanner, release both to close it.
+// This replaces the ear-zone gesture and makes scanner entry/exit consistent with other
+// VR hold-gestures (reload, two-hand grip). 0 = ear-zone (default), 1 = dual-grip.
+extern "C" __declspec(dllexport) int32_t CyberpunkVR_ScannerDualGrip = 0;
 // THE HACK LIST ON THE LEFT STICK, up and down, at the threshold every other gesture in this file
 // fires at. It REPLACES the face buttons for paging -- X and Y sat under the thumb of the hand that is
 // already squeezing a grip at the ear, which is the reach the one-handed scanner exists to avoid, so X
@@ -511,6 +515,9 @@ DWORD WINAPI HookedXInputGetState(DWORD dwUserIndex, XINPUT_STATE* pState) {
         static double s_inMs = 0.0;    // continuous time INSIDE the zone
         static double s_outMs = 0.0;   // continuous time OUTSIDE it
         static LARGE_INTEGER s_qpc = {};
+        // DUAL-GRIP scanner state, lives outside the ear-zone block so it can be toggled from anywhere.
+        static bool   s_dlgLatch = false;   // dual-grip toggle state
+        static bool   s_dlgPrev = false;    // previous dual-grip state
 
         LARGE_INTEGER now, freq;
         QueryPerformanceCounter(&now);
@@ -584,6 +591,25 @@ DWORD WINAPI HookedXInputGetState(DWORD dwUserIndex, XINPUT_STATE* pState) {
             scannerHold = s_gesture;
         }
         s_prevGesture = s_gesture;
+
+        // DUAL-GRIP SCANNER: both grips together act as the scanner toggle. The left grip is
+        // already consumed by the magazine grab (reload) and the cyberware chord, so dual-grip
+        // only works when those are not active and the player is on foot. Release both grips to
+        // close the scanner.
+        if (CyberpunkVR_ScannerDualGrip != 0 && !g_isInVehicle && !onLadder && g_menuModeValue == 0) {
+            const bool bothDown = (vr.leftGrip > 0.5f) && (vr.rightGrip > 0.5f);
+            const bool neitherDown = (vr.leftGrip <= 0.5f) && (vr.rightGrip <= 0.5f);
+            if (bothDown && !s_dlgPrev) {
+                // Rising edge on both grips: toggle the scanner
+                s_dlgLatch = !s_dlgLatch;
+            }
+            if (s_dlgLatch && neitherDown) {
+                // Both released while scanner is open: close it
+                s_dlgLatch = false;
+            }
+            scannerHold = s_dlgLatch;
+        }
+        s_dlgPrev = (vr.leftGrip > 0.5f) && (vr.rightGrip > 0.5f);
     }
 
     // ---- THE SCANNER, WORKED WITH THE HAND THAT RAISED IT ---------------------------------------
@@ -627,6 +653,9 @@ DWORD WINAPI HookedXInputGetState(DWORD dwUserIndex, XINPUT_STATE* pState) {
         static bool     s_xWasDown     = false;
         static bool     s_r3WasDown    = false;
         static bool     s_rtWasDown    = false;
+        static bool     s_dpadUpWas    = false;
+        static bool     s_dpadDownWas  = false;
+        static uint64_t s_stickUpUntilMs = 0, s_stickDownUntilMs = 0;
         static uint64_t s_upUntilMs = 0, s_downUntilMs = 0, s_applyUntilMs = 0,
                         s_tagUntilMs = 0, s_tabUntilMs = 0;
 
@@ -653,6 +682,36 @@ DWORD WINAPI HookedXInputGetState(DWORD dwUserIndex, XINPUT_STATE* pState) {
             // scanner is not an improvement on doing nothing.
             (void)yDown;
 
+            // THE D-PAD, if it is available from the controller. The Steam Deck and Steam Frame both
+            // have physical D-pads that reach the game through the L3+R3 chord right now -- which asks
+            // for two hands in the middle of a scanner the player is already holding. When dual-grip
+            // is enabled the D-pad is free for scanner navigation directly, without any chord.
+            // The D-pad bits in vr.buttons come from OpenXR actions: /user/hand/left/input/dpad_*.
+            const bool dpadUp   = (vr.buttons & 0x0001) != 0;
+            const bool dpadDown = (vr.buttons & 0x0002) != 0;
+            if ((dpadUp || dpadDown) && CyberpunkVR_ScannerDualGrip != 0) {
+                if (dpadUp   && !s_dpadUpWas)   s_upUntilMs   = now + pulseMs;
+                if (dpadDown && !s_dpadDownWas) s_downUntilMs = now + pulseMs;
+                s_dpadUpWas   = dpadUp;
+                s_dpadDownWas = dpadDown;
+            } else {
+                // FALLBACK TO THE LEFT STICK when the D-pad is not available.
+                const float navFire  = (CyberpunkVR_ScannerStickNavFire  > 0.0f) ? CyberpunkVR_ScannerStickNavFire  : 0.90f;
+                const float navRearm = (CyberpunkVR_ScannerStickNavRearm > 0.0f) ? CyberpunkVR_ScannerStickNavRearm : 0.50f;
+                if (vr.leftThumbY > navFire && s_stickDownUntilMs <= now) {
+                    s_upUntilMs = now + pulseMs;
+                    s_stickDownUntilMs = now + 1;   // one frame gap before the re-arm
+                }
+                if (vr.leftThumbY < -navFire && s_stickUpUntilMs <= now) {
+                    s_downUntilMs = now + pulseMs;
+                    s_stickUpUntilMs = now + 1;
+                }
+                // RE-ARM: the stick has to come back through the threshold. A thumb resting at
+                // 0.85 would keep firing up if it only needed to go below 0.50 to re-arm.
+                if (vr.leftThumbY < navRearm) s_stickDownUntilMs = 0;
+                if (vr.leftThumbY > -navRearm) s_stickUpUntilMs = 0;
+            }
+
             // The tag, on a travel the finger cannot chatter through: 0.65 to arm, 0.35 to release, so
             // one squeeze is one tag and a finger resting on the trigger is not a stream of them.
             if (CyberpunkVR_ScannerTriggerTag != 0) {
@@ -678,6 +737,8 @@ DWORD WINAPI HookedXInputGetState(DWORD dwUserIndex, XINPUT_STATE* pState) {
             s_xWasDown  = false;
             s_r3WasDown = false;
             s_rtWasDown = false;
+            s_dpadUpWas = false;
+            s_dpadDownWas = false;
         }
 
         scanDpadUp   = (now < s_upUntilMs);

@@ -189,7 +189,8 @@ void DrawBindings() {
         {"LEFT TRIGGER","Aim / block in melee."},
         {"RIGHT GRIP  At a holster","Equip or holster the weapon at the reached slot."},
         {"LEFT GRIP","Grab the magazine during a reload."},
-        {"LEFT GRIP  Near left ear","Toggle the scanner. Squeeze again to close it."},
+        {"LEFT GRIP  Near left ear","Toggle the scanner (ear gesture). Squeeze again to close it."},
+        {"BOTH GRIPS","Toggle the scanner (dual grip). Release both to close it."},
         {"L3 + LEFT GRIP  Hold 0.5 seconds","Activate cyberware once. Release both to use again."},
         {"LEFT MENU BUTTON","Open the game's pause menu."}
     };
@@ -201,7 +202,8 @@ void DrawBindings() {
     };
     group("SWIMMING",swimming,IM_ARRAYSIZE(swimming));
     static const Binding scanner[]{
-        {"LEFT STICK  Full up / down","Page through quickhacks. Partial movement still walks."},
+        {"BOTH GRIPS  Hold","Enter scanner mode. Release both to exit."},
+        {"LEFT D-PAD  Up / Down","Page through quickhacks."},
         {"X  Left controller","Apply the selected quickhack."},
         {"RIGHT TRIGGER","Tag the target while scanning."},
         {"RIGHT STICK  Press","Change scanner tab."},
