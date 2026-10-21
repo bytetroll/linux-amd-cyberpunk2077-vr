@@ -14,6 +14,7 @@
 --   E.playerPlane       scene or weapon, which decides how the item is attached
 --   E.eulerQuat         the panel's degrees to the engine's quaternion
 --   E.transactions      the transaction system, cached by the belt
+--   E.grabTarget        current reachable belt row, revalidated at the grip edge
 --
 -- Driven from init.lua:  GRENADE.tick(now, dt)  every frame,  GRENADE.release(pl)  to force it back.
 
@@ -136,7 +137,9 @@ grenadeAttach = function(pl, side, host, now)
     E.S.grab.partNames, E.S.grab.partTypes = nil, nil
     E.S.grab.holdTraceAttempts, E.S.grab.holdTraceValidPasses = 0, 0
     pinS.out, pinS.armed, pinS.at, pinS.pull = false, false, nil, nil
+    pinS.itemP, pinS.itemQ, pinS.prev, pinS.grabQ = nil, nil, nil, nil
     leverS.amount, leverS.key, leverS.shut = 0.0, nil, false  -- a fresh grenade is taken lever-open
+    leverS.armAt = nil
     trace("attach: state written")
     -- THE MARK GOES OUT WITH THE THING IT MARKED -- but NOT from here. Writing to components inside
     -- the grab is what turned a working grab into a crash: the run before this call was added took a
@@ -156,6 +159,8 @@ grenadeRelease = function(pl)
     magnetClear()
     setTriggerBlock(false)
     leverS.amount, leverS.key, leverS.shut = 0.0, nil, false
+    leverS.armAt = nil
+    pinS.itemP, pinS.itemQ, pinS.prev, pinS.grabQ = nil, nil, nil, nil
     E.S.grab.lever = nil
     -- THE PIN GOES BACK IN. It was switched off on this entity, and the entity outlives the hold: put
     -- one back on the belt and take it again and it came back without a pin -- a grenade that can only
@@ -1896,18 +1901,23 @@ updateGrenadeGrab = function(now, dt)
     local pl = Game.GetPlayer()
     if pl == nil then return end
     E.S.grab.lastDt = dt
+    -- Opening the holding hand ends interaction before either arming gesture.
+    -- A pin pull or button dwell crossing its threshold on this same frame
+    -- must not turn an intended stow into a throw.
+    local releasing = E.S.grab.slot ~= nil and not E.S.grab.pinned
+                      and not gripDown(E.S.grab.side)
     -- The fingers follow the hold, in both directions, whatever ends it -- and WHICH hold, since the
     -- grip before the pin is not the grip after it.
     -- THE LEVER FIRST: the hold pose and the hold transform both read it, and a frame-late lever is a
     -- finger that presses after the trigger is already back up.
-    leverTick(dt)
+    if not releasing and E.CFG.grenade_grab then leverTick(dt) end
     -- The hand's speed, every frame it holds something, and the pending launch whether it does or not.
     throwSample(E.S.grab.slot ~= nil and E.S.grab.side or nil, dt)
     throwTick(pl)
     -- ...and the gun stays quiet while the thing is in the hand.
     setTriggerBlock(E.S.grab.slot ~= nil and E.CFG.grenade_trigger_block ~= false)
     poseTick(E.S.grab.slot ~= nil and E.S.grab.side or nil, dt)
-    updatePin(now, dt)
+    if not releasing and E.CFG.grenade_grab then updatePin(now, dt) end
 
     if not E.CFG.grenade_grab then
         if E.S.grab.slot ~= nil then grenadeRelease(pl) end
@@ -1976,9 +1986,10 @@ updateGrenadeGrab = function(now, dt)
         local edge = down and not E.S.grab.was[side]
         E.S.grab.was[side] = down
         if edge and E.S.grab.slot == nil then
-            local host = E.S.litHand[side]
-            -- The proximity test the mark already ran IS the "at the belt" condition -- see the note
-            -- on E.CFG.grenade_grab. Nothing else can start a grab.
+            -- The mark runs at a lower rate than grip input. Recheck proximity
+            -- now so a stale highlight cannot grab a pouch the hand has left,
+            -- or miss a pouch reached since the last cosmetic scan.
+            local host = E.grabTarget(side)
             if host ~= nil and string.sub(host, 1, 13) == "ucbeltgrenade" then
                 grenadeAttach(pl, side, host, now)
             end

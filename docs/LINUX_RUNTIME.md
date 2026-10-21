@@ -36,7 +36,7 @@ Steam updates may replace the module. Re-run `status` after an update. **Do not 
 
 ## Controller menus and runtime queue
 
-The native menu uses gamepad A for selection and loading-screen skips. The Index's right A button retains that behavior; the right trigger also confirms while native menu mode is active. Release the trigger before selecting. A trigger held through a menu transition is suppressed until release so it cannot immediately fire a weapon. This uses the game's existing cursor/navigation path; it does not add a tracked-controller pointer to the native menu.
+Native menus have a right-controller pointer on the displayed menu plane while the game window is focused. Squeeze and release the trigger to click, or hold it while moving an inventory item and release at its destination. Press the Index's left oval touchpad to open the equipment menu. Right A remains available for confirmation and loading-screen holds. Release the trigger before selecting. A trigger held through a menu transition is suppressed until release so it cannot immediately fire a weapon. See [Index controls](INDEX_CONTROLS.md) for scanner, holster, crouch and HUD settings.
 
 The Linux quality pass binds OpenXR to a separate runtime queue when both Wine and SteamVR are detected. Capture and rendering stay on the game queue, with explicit fence handoffs before image writes and releases. This follows the availability requirements of [OpenXR's D3D12 binding](https://registry.khronos.org/OpenXR/specs/1.1-khr/html/xrspec.html#XR_KHR_D3D12_enable). Its performance benefit still requires measurement in the headset.
 
@@ -67,7 +67,9 @@ Relevant Valve Linux issue discussions: [asynchronous support](https://github.co
 
 ## Body alignment
 
-Recenter while upright, stationary and facing forward. Hybrid body rotation intentionally allows some head/body separation and changes its torso inference while looking down. Small offsets should be checked after recentering before applying manual camera trims. F10 exposes the mod's controls.
+Recenter while upright, stationary and facing forward. Physical crouch now removes the neutral 8 cm head-to-neck offset before applying the crouch threshold. The game's native crouch toggle is separate: F7 does not change it. Hybrid body rotation intentionally allows some head/body separation and changes its torso inference while looking down. Small offsets should be checked after recentering before applying manual camera trims. F10 exposes the mod's controls.
+
+Individual finger articulation is optional at runtime. The plugin enables `XR_EXT_hand_tracking` when available, requests controller-derived data when `XR_EXT_hand_tracking_data_source` is available, and retains existing animations when valid joint samples are unavailable. The implementation uses [OpenXR hand joint locations](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrHandJointLocationsEXT.html) and [data source selection](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrHandTrackingDataSourceInfoEXT.html). Extension advertisement alone does not establish that an active controller skeleton reaches the Windows plugin through Proton; the startup and first-active `[Fingers]` log entries distinguish those stages. Set `CVR_XR_FINGER_TRACKING=0` for the previous animation path.
 
 ## Diagnostics
 

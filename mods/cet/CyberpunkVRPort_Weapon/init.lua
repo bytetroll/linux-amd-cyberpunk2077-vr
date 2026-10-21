@@ -766,29 +766,33 @@ local function carryTick(dt)
     -- a load, a mod reload, a reload module that took the weapon, or the player holstering through the
     -- hand-to-holster mod while the weapon is in the left hand. In all cases the carry flag must come
     -- down with it, or the right trigger stays dead (SetVRCarryLeft = 1 suppresses RT in XInput.cpp).
-    if not rFresh then
-        local leftItem = ts:GetItemInSlot(pl, LEFT)
-        if leftItem == nil then
-            if carryOn then
-                -- The weapon vanished from the left slot without the carry return path (holster,
-                -- unequip, reload module). Tear down carry state so the next weapon starts clean.
-                carryOn = false
-                carryItemID = nil
-                carryLeftSlot = nil
-                carryGrip = nil
-                carryW = 0.0
-                carryV = 0.0
-                carryHoming = false
-                if type(SetVRCarryLeft) == 'function' then pcall(function() SetVRCarryLeft(0) end) end
-                logAlways('carry: left slot empty (external unequip) -- full reset')
-            end
-            local cur = slotGetRel('WeaponLeft')
-            if cur and (math.abs(cur.x) + math.abs(cur.y) + math.abs(cur.z)) > 0.0005 then
-                slotSetRel('WeaponLeft', 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0)
-            end
+    local leftItem = ts:GetItemInSlot(pl, LEFT)
+    if leftItem == nil then
+        local wasCarrying = carryOn
+        if carryOn then
+            -- Holster can remove the left weapon on this same grip edge, before
+            -- this callback runs. Clear the cached ID before any return gesture
+            -- can recreate that weapon in the right hand.
+            carryOn = false
+            carryItemID = nil
+            carryLeftSlot = nil
+            carryGrip = nil
+            carryW = 0.0
+            carryV = 0.0
+            carryHoming = false
+            if type(SetVRCarryLeft) == 'function' then pcall(function() SetVRCarryLeft(0) end) end
+            logAlways('carry: left slot empty (external unequip) -- full reset')
         end
-        return
+        local cur = slotGetRel('WeaponLeft')
+        if cur and (math.abs(cur.x) + math.abs(cur.y) + math.abs(cur.z)) > 0.0005 then
+            slotSetRel('WeaponLeft', 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0)
+        end
+        if wasCarrying then return end
     end
+    -- Consume the edge while the scanner owns both grips, including its release
+    -- tail; keeping the grip held after scanning must not transfer a weapon.
+    if type(GetVRSharedSlot) == 'function' and (GetVRSharedSlot(69) or 0) > 0.5 then return end
+    if not rFresh then return end
 
     if not carryOn then
         -- NOT FOR PISTOLS: a one-handed weapon has no reason to change hands. Class 1 is
@@ -857,6 +861,7 @@ local function carryTick(dt)
     else
         local from = TweakDBID.new(carryLeftSlot or SLOT_LEFT_STOCK)
         local w = ts:GetItemInSlot(pl, from)
+        if not w then return end -- never reconstruct a removed weapon from its cached ID
         -- THE REACH: the plugin answers it against its own radius (xr_carry_radius), the same one the
         -- finger preview springs on, so the fingers closing on the weapon and the button taking it
         -- happen at exactly the same distance.
@@ -870,7 +875,7 @@ local function carryTick(dt)
                 return
             end
         end
-        local id = carryItemID or (w and w:GetItemID())
+        local id = w:GetItemID()
         local okA = false
         if id then
             -- the same way back, object and plane both passed. `w` is read BEFORE the remove and stays

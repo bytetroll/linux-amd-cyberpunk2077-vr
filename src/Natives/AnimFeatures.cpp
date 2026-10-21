@@ -255,7 +255,7 @@ int32_t QueueFloatInputEvent(const RED4ext::CName& aKey, float aValue)
     if (!evt)
         return -43;
 
-    return QueuePlayerEvent(RED4ext::Handle<RED4ext::red::Event>(evt.Get())) ? 11 : -44;
+    return QueuePlayerEvent(RED4ext::Handle<RED4ext::red::Event>(evt)) ? 11 : -44;
 }
 
 void AppendAnimFloatTestLog(const char* aRouteName, const RED4ext::CName& aKey, float aValue, int32_t aResult)
@@ -451,9 +451,9 @@ int32_t QueueVectorInputEvents(const RED4ext::Vector4& aLeft, const RED4ext::Vec
         return -20;
 
     int32_t queued = 0;
-    if (QueuePlayerEvent(RED4ext::Handle<RED4ext::red::Event>(leftEvt.Get())))
+    if (QueuePlayerEvent(RED4ext::Handle<RED4ext::red::Event>(leftEvt)))
         ++queued;
-    if (QueuePlayerEvent(RED4ext::Handle<RED4ext::red::Event>(rightEvt.Get())))
+    if (QueuePlayerEvent(RED4ext::Handle<RED4ext::red::Event>(rightEvt)))
         ++queued;
 
     return queued == 2 ? 6 : -21;
@@ -466,7 +466,7 @@ int32_t QueueFeatureInputEvent(const RED4ext::CName& aFeatureName,
     if (!evt)
         return -22;
 
-    return QueuePlayerEvent(RED4ext::Handle<RED4ext::red::Event>(evt.Get())) ? 7 : -23;
+    return QueuePlayerEvent(RED4ext::Handle<RED4ext::red::Event>(evt)) ? 7 : -23;
 }
 
 int32_t QueueFeatureInputEvent(const RED4ext::CName& aFeatureName,

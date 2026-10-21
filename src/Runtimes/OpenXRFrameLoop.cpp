@@ -1,4 +1,5 @@
 #include "Utils/DebugGate.hpp"
+#include "Runtimes/FingerTracking.hpp"
 #include "Render/CommandResources.hpp"
 #include "Render/GpuStageProfile.hpp"
 // openxr_frameloop.cpp - the XR frame loop (PumpInlineFrame / FrameThreadMain).
@@ -10,6 +11,7 @@
 #include "Runtimes/RoomscaleTracking.hpp"
 #include "Runtimes/SimulatorRecenter.hpp"
 #include "Hooks/CyberwareChord.hpp"
+#include "Hooks/NativeMenuPointer.hpp"
 #include "Runtimes/OpenXRInternal.hpp"
 #include "Anim/CharacterRig.hpp"   // VRIK_NoteShake: the shake census, stage 3
 #include "Utils/XrMath.hpp"
@@ -1319,6 +1321,10 @@ DWORD OpenXRManager::FrameThreadMain() {
         uint32_t viewCountOutput = 0;
         const bool monoEnabled = m_monoSubmitEnabled.load(std::memory_order_relaxed);
         const bool menuRectActive = (GetMenuRectMode() != 0) || (GetMenuMode() != 0);
+        XrPosef nativeMenuAim{{0,0,0,1},{}};
+        bool nativeMenuAimValid=false;
+        uint64_t nativeMenuAimStamp=0,nativeMenuAimOrigin=0;
+        if(!menuRectActive)cvr::input::PublishNativeMenuPointer({});
         // Menu closed -> drop the latched panel anchors so the NEXT menu re-anchors in
         // front of wherever the player is looking at open time.
         if (!menuRectActive) {
@@ -1553,6 +1559,11 @@ DWORD OpenXRManager::FrameThreadMain() {
             m_oriY.store(filteredHeadPose.orientation.y, std::memory_order_relaxed);
             m_oriZ.store(filteredHeadPose.orientation.z, std::memory_order_relaxed);
             m_oriW.store(filteredHeadPose.orientation.w, std::memory_order_relaxed);
+            {
+                std::lock_guard lock(m_locomotionHeadingMutex);
+                const auto& q=filteredHeadPose.orientation;
+                m_hmdHeading.Observe(GetTrackingOriginSerial(),true,q.x,q.y,q.z,q.w);
+            }
             m_poseValid.store(true, std::memory_order_relaxed);
             {
                 std::lock_guard lock(m_roomscaleSampleMutex);
@@ -1588,6 +1599,7 @@ DWORD OpenXRManager::FrameThreadMain() {
                 // for-byte identical to the pre-Controls-tab behaviour.
                 const bool gameplayInputActive = (GetInputActionsEnabled() != 0) && (m_thumbstickAction != XR_NULL_HANDLE);
                 VRControllerState ctrl{};
+                ctrl.inputSyncValid=syncRes==XR_SUCCESS;
                 cvr::vrui::Tracking uiTracking{};
                 uiTracking.time=frameState.predictedDisplayTime;uiTracking.origin=GetTrackingOriginSerial();
                 uiTracking.head=location.pose;uiTracking.valid=headPoseLocated;
@@ -1730,7 +1742,12 @@ DWORD OpenXRManager::FrameThreadMain() {
                         m_handFilterState[i].initialized = false;
                     }
 
-                    if (!gameplayInputActive) continue; // legacy pose-only path, no new bookkeeping
+                    if (!gameplayInputActive) {
+                        std::lock_guard lock(m_locomotionHeadingMutex);
+                        m_handHeading[i].Reset(GetTrackingOriginSerial());
+                        m_handAimYawFilter[i].initialized=false;
+                        continue;
+                    }
 
                     if (i == 0) ctrl.leftHandValid  = poseValid;
                     else        ctrl.rightHandValid = poseValid;
@@ -1739,19 +1756,26 @@ DWORD OpenXRManager::FrameThreadMain() {
                     // where the palm faces. grip-pose -Z is "away from palm",
                     // which is MIRRORED between left and right hands and gave
                     // inverted/diverging locomotion direction.
-                    bool aimYawValid = false;
+                    bool aimLocated = false;
+                    XrQuaternionf aimOrientation{};
                     if (poseValid && m_handAimSpaces[i] != XR_NULL_HANDLE) {
                         XrSpaceLocation aimLoc{XR_TYPE_SPACE_LOCATION};
                         if (XR_SUCCEEDED(xrLocateSpace(m_handAimSpaces[i], m_localSpace, handLocateTime, &aimLoc)) &&
                             (aimLoc.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT)) {
-                            const XrQuaternionf q = MultiplyQuat(baseInv, aimLoc.pose.orientation);
-                            // Same yaw extraction as GetHmdYawRelToBody so both
-                            // HMD-locomotion and Hand-locomotion use the SAME
-                            // sign convention. atan2(fwd.x, -fwd.z) was sign-
-                            // inverted relative to this and produced mirrored
-                            // walking direction.
-                            const float yaw = std::atan2(2.0f * (q.w * q.y + q.x * q.z),
-                                                         1.0f - 2.0f * (q.y * q.y + q.z * q.z));
+                            aimOrientation=MultiplyQuat(baseInv, aimLoc.pose.orientation);
+                            aimLocated=true;
+                        }
+                    }
+                    {
+                        std::lock_guard lock(m_locomotionHeadingMutex);
+                        const auto origin=GetTrackingOriginSerial();
+                        if(!m_handHeading[i].Valid(origin))m_handAimYawFilter[i].initialized=false;
+                        const auto& q=aimOrientation;
+                        // Use the same floor projection as HMD locomotion. A
+                        // vertical aim or tracking loss retains the previous
+                        // direction instead of switching movement to head yaw.
+                        if(m_handHeading[i].Observe(origin,aimLocated,q.x,q.y,q.z,q.w)) {
+                            const float yaw=m_handHeading[i].Value(origin);
                             // LOCOMOTION, not rendering. This smooths the direction the stick walks
                             // in; it shared the hand-pose knob only because that knob happened to
                             // exist, and it kept its own value when that one went. Nothing here is
@@ -1763,14 +1787,8 @@ DWORD OpenXRManager::FrameThreadMain() {
                                 kAimYawSmooth,
                                 0.0040f,
                                 0.0800f);
-                            m_handYawRelToBody[i].store(filteredYaw, std::memory_order_relaxed);
-                            m_handYawValid[i].store(true, std::memory_order_relaxed);
-                            aimYawValid = true;
+                            m_handYawRelToBody[i]=filteredYaw;
                         }
-                    }
-                    if (!aimYawValid) {
-                        m_handAimYawFilter[i].initialized = false;
-                        m_handYawValid[i].store(false, std::memory_order_relaxed);
                     }
 
                     // -- Gameplay inputs (trigger/grip/stick/buttons) --
@@ -1809,18 +1827,25 @@ DWORD OpenXRManager::FrameThreadMain() {
 
                     bool triggerActive = false;
                     const float trig = getFloat(m_triggerAction, &triggerActive);
-                    const float grip = getFloat(m_gripAction);
+                    bool gripActive = false;
+                    const float grip = getFloat(m_gripAction, &gripActive);
                     float sx = 0.0f, sy = 0.0f;
                     getVec2(m_thumbstickAction, sx, sy);
                     const bool sclick = getBool(m_thumbstickClickAction);
                     auto& uiHand=uiTracking.hands[i];
                     uiHand.stickClick=sclick;uiHand.trigger=trig;uiHand.grip=grip;uiHand.stickY=sy;
                     uiHand.valid=poseValid;
-                    if((cvr::vrui::Visible() || cvr::vrui::CapturesInput() || sclick) && m_handAimSpaces[i]!=XR_NULL_HANDLE){
+                    if((menuRectActive || cvr::vrui::Visible() || cvr::vrui::CapturesInput() || sclick) && m_handAimSpaces[i]!=XR_NULL_HANDLE){
                         uiHand.valid=false;
                         XrSpaceLocation aim{XR_TYPE_SPACE_LOCATION};
                         constexpr auto need=XR_SPACE_LOCATION_POSITION_VALID_BIT|XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
-                        if(XR_SUCCEEDED(xrLocateSpace(m_handAimSpaces[i],m_localSpace,frameState.predictedDisplayTime,&aim)) && (aim.locationFlags&need)==need){uiHand.aim=aim.pose;uiHand.valid=true;}
+                        if(XR_SUCCEEDED(xrLocateSpace(m_handAimSpaces[i],m_localSpace,frameState.predictedDisplayTime,&aim)) && (aim.locationFlags&need)==need){
+                            uiHand.aim=aim.pose;uiHand.valid=true;
+                            if(i==1 && menuRectActive && syncRes==XR_SUCCESS) {
+                                nativeMenuAim=aim.pose;nativeMenuAimValid=true;
+                                nativeMenuAimStamp=GetTickCount64();nativeMenuAimOrigin=GetTrackingOriginSerial();
+                            }
+                        }
                     }
                     const bool prim   = getBool(m_primaryButtonAction);
                     const bool sec    = getBool(m_secondaryButtonAction);
@@ -1843,8 +1868,11 @@ DWORD OpenXRManager::FrameThreadMain() {
                     (void)XB_LEFT_THUMB;
 
                     if (i == 0) {
+                        if(m_hubMenuAction!=XR_NULL_HANDLE)
+                            ctrl.hubMenuForce=getFloat(m_hubMenuAction,&ctrl.hubMenuActive);
                         ctrl.leftTrigger = trig;
                         ctrl.leftGrip    = grip;
+                        ctrl.leftGripActive = gripActive;
                         ctrl.leftThumbX  = sx;
                         ctrl.leftThumbY  = sy;
                         if (prim)   ctrl.buttons |= XB_X;
@@ -1862,6 +1890,7 @@ DWORD OpenXRManager::FrameThreadMain() {
                         ctrl.rightTrigger = trig;
                         ctrl.rightTriggerActive = triggerActive;
                         ctrl.rightGrip    = grip;
+                        ctrl.rightGripActive = gripActive;
                         ctrl.rightThumbX  = sx;
                         ctrl.rightThumbY  = sy;
                         if (sclick) ctrl.buttons |= XB_RIGHT_THUMB;
@@ -1937,6 +1966,7 @@ DWORD OpenXRManager::FrameThreadMain() {
                     if(getGlobalBool(m_menuButtonAction))ctrl.buttons|=0x0010; // XINPUT_GAMEPAD_START
 
                     // Publish the snapshot for the XInput hook.
+                    ctrl.inputStampMs=GetTickCount64();
                     std::lock_guard<std::mutex> inLock(m_inputMutex);
                     m_controllerState = ctrl;
                 }
@@ -1966,6 +1996,8 @@ DWORD OpenXRManager::FrameThreadMain() {
             m_roomscaleSample.valid = false;
             if (resetStable) m_coherentHeadPose.valid = false;
         }
+
+        cvr::finger::Tracking().Sample(m_localSpace,handLocateTime,m_sessionState==XR_SESSION_STATE_FOCUSED);
 
         if (monoReady && viewCountOutput == m_eyeSwapchains.size()) {
             {
@@ -2923,6 +2955,14 @@ DWORD OpenXRManager::FrameThreadMain() {
                             const XrResult endRes = poseGateOk
                                 ? phaseCycle.Measure(XrPhase::End, [&] { return xrEndFrame(m_session, &endInfo); })
                                 : XR_ERROR_POSE_INVALID;
+                            if(menuRectActive) {
+                                cvr::input::NativeMenuPointerFrame pointer;
+                                pointer.active=poseGateOk && XR_SUCCEEDED(endRes);
+                                pointer.aimValid=nativeMenuAimValid;
+                                pointer.aim=nativeMenuAim;pointer.panel=layerQuad.pose;pointer.size=layerQuad.size;
+                                pointer.stampMs=nativeMenuAimStamp;pointer.origin=nativeMenuAimOrigin;
+                                cvr::input::PublishNativeMenuPointer(pointer);
+                            }
                             if (poseGateOk)
                                 phaseCycle.EndResult(XR_SUCCEEDED(endRes), true,
                                     fgSelected ? fgSelection.frame.identity.serial : presentSerial,

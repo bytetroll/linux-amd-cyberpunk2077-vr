@@ -175,6 +175,14 @@ void DrawBindings() {
         ImGui::PopStyleVar();
     };
     ImGui::TextWrapped("VR shortcuts and default game actions. Button names follow the Touch / Xbox convention; game actions use your controller bindings.");
+    ImGui::TextWrapped("On Index, left A/B correspond to X/Y here; right A/B keep their names.");
+    static const Binding menus[]{
+        {"LEFT TOUCHPAD  Index oval pad","Press to open the equipment menu, then choose Inventory. Release before another press."},
+        {"RIGHT CONTROLLER + RIGHT TRIGGER","Point and click. Hold the trigger to drag an inventory item; release at its destination."},
+        {"A  Right controller","Select / continue. Hold for game actions that require confirmation."},
+        {"LEFT STICK","Native cursor fallback when the ray is off-panel or the pointer is disabled in CONTROLS."}
+    };
+    group("NATIVE MENUS",menus,IM_ARRAYSIZE(menus));
     static const Binding foot[]{
         {"LEFT STICK","Move. Hold fully forward for 0.2 seconds to sprint."},
         {"RIGHT STICK  Left / right","Turn. Uses your snap-turn setting."},
@@ -189,8 +197,8 @@ void DrawBindings() {
         {"LEFT TRIGGER","Aim / block in melee."},
         {"RIGHT GRIP  At a holster","Equip or holster the weapon at the reached slot."},
         {"LEFT GRIP","Grab the magazine during a reload."},
-        {"LEFT GRIP  Near left ear","Toggle the scanner (ear gesture). Squeeze again to close it."},
-        {"BOTH GRIPS","Toggle the scanner (dual grip). Release both to close it."},
+        {"LEFT GRIP  Near left ear","Scanner alternative when Both grips is disabled in CONTROLS."},
+        {"BOTH GRIPS","Toggle scanner. Release both before squeezing again to close."},
         {"L3 + LEFT GRIP  Hold 0.5 seconds","Activate cyberware once. Release both to use again."},
         {"LEFT MENU BUTTON","Open the game's pause menu."}
     };
@@ -202,8 +210,9 @@ void DrawBindings() {
     };
     group("SWIMMING",swimming,IM_ARRAYSIZE(swimming));
     static const Binding scanner[]{
-        {"BOTH GRIPS  Hold","Enter scanner mode. Release both to exit."},
-        {"LEFT D-PAD  Up / Down","Page through quickhacks."},
+        {"D-PAD UP","Toggle scanner. On Index: hold left stick click and tilt the right stick up. Grips stay available for items."},
+        {"LEFT STICK  Up / Down","Page through quickhacks. Return to centre between steps."},
+        {"D-PAD DOWN (when available)","Page down through quickhacks. D-pad Up is the scanner toggle; use the left stick for list navigation."},
         {"X  Left controller","Apply the selected quickhack."},
         {"RIGHT TRIGGER","Tag the target while scanning."},
         {"RIGHT STICK  Press","Change scanner tab."},

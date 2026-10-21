@@ -18,6 +18,35 @@
 #include <windows.h>
 #include <cstdint>
 #include <cstddef>
+#include <atomic>
+#include <cmath>
+
+namespace {
+void MovementHeadingDiag(int configuredSource,int source,float inputX,float inputY,
+                         float outputX,float outputY,float sourceYaw,float bodyOffset,
+                         uint64_t origin) {
+    // Reserve a separate budget for turns with substantial compensation so
+    // an uneventful opening minute cannot exhaust the evidence for drift.
+    constexpr float tau=6.28318530718f;
+    const bool large=std::abs(std::remainder(sourceYaw-bodyOffset,tau))>.7f ||
+        std::abs(std::remainder(bodyOffset,tau))>.7f;
+    const unsigned bucket=large?1:0,limit=large?128:32;
+    static std::atomic<unsigned> lines[2]{};
+    static std::atomic<uint64_t> last[2]{};
+    if(lines[bucket].load(std::memory_order_relaxed)>=limit)return;
+    const auto now=GetTickCount64();
+    auto previous=last[bucket].load(std::memory_order_relaxed);
+    if((previous && now-previous<2000) ||
+       !last[bucket].compare_exchange_strong(previous,now,std::memory_order_relaxed))return;
+    const auto line=lines[bucket].fetch_add(1,std::memory_order_relaxed)+1;
+    Log("[moveheading] ms=%llu origin=%llu source=%d configured=%d raw=(%.4f,%.4f) "
+        "rotated=(%.4f,%.4f) sourceYawDeg=%.2f bodyOffsetDeg=%.2f relativeYawDeg=%.2f "
+        "large=%d sample=%u/%u\n",static_cast<unsigned long long>(now),
+        static_cast<unsigned long long>(origin),source,configuredSource,inputX,inputY,outputX,outputY,
+        sourceYaw*57.2957795f,bodyOffset*57.2957795f,
+        std::remainder(sourceYaw-bodyOffset,tau)*57.2957795f,int(large),line,limit);
+}
+}
 
 extern "C" void OnOnFootMoveXYCallback(void* moveStruct) {
     cvr::swimming::BindNativeInput(moveStruct);
@@ -58,11 +87,14 @@ extern "C" void OnOnFootMoveXYCallback(void* moveStruct) {
     // It used to cancel by itself: the old realign rotated the recenter base by the same angle, which
     // moved base-relative and heading-relative into step. That base rotation is gone (it landed a
     // frame late and swung the view), so the subtraction is explicit now. Zero when the feature is off.
-    yaw -= BodyYawFollowOffset();
+    const float sourceYaw=yaw,bodyOffset=BodyYawFollowOffset();
+    yaw -= bodyOffset;
     float c = cosf(yaw);
     float s = sinf(yaw);
     p[0] = x * c - y * s;
     p[1] = x * s + y * c;
+    MovementHeadingDiag(g_liveControls.xrMovementSource,src,x,y,p[0],p[1],sourceYaw,bodyOffset,
+                        OpenXRManager::Get().GetTrackingOriginSerial());
 }
 
 bool InstallOnFootMoveXYHook() {

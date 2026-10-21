@@ -38,6 +38,14 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_
 endif()
 add_test(NAME grenade_hold
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/../belt_tests/run_grenade_hold.py")
+add_test(NAME belt_reach
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/../belt_tests/run_reach.py")
+add_test(NAME holster
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/../belt_tests/run_holster.py")
+add_test(NAME weapon_carry
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/../belt_tests/run_weapon_carry.py")
+add_test(NAME reload_slide_handoff
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/../belt_tests/run_reload_handoff.py")
 add_test(NAME thunk_source_parity
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/../check_thunk_parity.py")
 
@@ -46,10 +54,50 @@ target_compile_features(roomscale_recovery PRIVATE cxx_std_20)
 target_include_directories(roomscale_recovery PRIVATE ../../include)
 add_test(NAME roomscale_recovery COMMAND roomscale_recovery)
 
+add_executable(physical_stance ../roomscale_tests/stance.cpp)
+target_compile_features(physical_stance PRIVATE cxx_std_20)
+target_include_directories(physical_stance PRIVATE ../../include)
+add_test(NAME physical_stance COMMAND physical_stance)
+
+add_executable(locomotion_heading ../roomscale_tests/locomotion_heading.cpp)
+target_compile_features(locomotion_heading PRIVATE cxx_std_20)
+target_include_directories(locomotion_heading PRIVATE ../../include)
+add_test(NAME locomotion_heading COMMAND locomotion_heading)
+
 add_executable(native_menu_input ../input_tests/native_menu.cpp)
 target_compile_features(native_menu_input PRIVATE cxx_std_20)
 target_include_directories(native_menu_input PRIVATE ../../include)
 add_test(NAME native_menu_input COMMAND native_menu_input)
+
+add_executable(scanner_input ../input_tests/scanner.cpp)
+target_compile_features(scanner_input PRIVATE cxx_std_20)
+target_include_directories(scanner_input PRIVATE ../../include)
+add_test(NAME scanner_input COMMAND scanner_input)
+
+add_executable(hub_menu_input ../input_tests/hub_menu.cpp)
+target_compile_features(hub_menu_input PRIVATE cxx_std_20)
+target_include_directories(hub_menu_input PRIVATE ../../include)
+add_test(NAME hub_menu_input COMMAND hub_menu_input)
+
+add_executable(menu_pointer ../input_tests/menu_pointer.cpp)
+target_compile_features(menu_pointer PRIVATE cxx_std_20)
+target_include_directories(menu_pointer PRIVATE ../../include "${CPVR_TEST_OPENXR_INCLUDE_DIR}")
+add_test(NAME menu_pointer COMMAND menu_pointer)
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(menu_pointer_dispatch ../input_tests/menu_pointer_dispatch.cpp)
+    target_compile_features(menu_pointer_dispatch PRIVATE cxx_std_20)
+    target_include_directories(menu_pointer_dispatch BEFORE PRIVATE ../input_tests/win32_stub)
+    target_include_directories(menu_pointer_dispatch PRIVATE ../../include "${CPVR_TEST_OPENXR_INCLUDE_DIR}")
+    target_link_libraries(menu_pointer_dispatch PRIVATE Threads::Threads)
+    add_test(NAME menu_pointer_dispatch COMMAND menu_pointer_dispatch)
+endif()
+
+add_executable(finger_tracking ../finger_tests/fingertracking.cpp ../../src/Runtimes/FingerTracking.cpp)
+target_compile_features(finger_tracking PRIVATE cxx_std_20)
+target_include_directories(finger_tracking PRIVATE ../../include "${CPVR_TEST_OPENXR_INCLUDE_DIR}")
+target_link_libraries(finger_tracking PRIVATE Threads::Threads)
+add_test(NAME finger_tracking COMMAND finger_tracking)
 
 add_subdirectory(../body_rotation_tests body_rotation)
 target_include_directories(body_rotation_tests PRIVATE "${CPVR_TEST_OPENXR_INCLUDE_DIR}")

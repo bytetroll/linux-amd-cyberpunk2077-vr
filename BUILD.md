@@ -83,11 +83,15 @@ ctest --test-dir build-host --output-on-failure
 
 The tests fetch only the pinned OpenXR headers. To reuse headers already downloaded by the plugin build, add `-DCPVR_TEST_OPENXR_INCLUDE_DIR="$PWD/build-win/_deps/openxr-src/include"` to configure.
 
-The Linux x86-64 suite contains 40 CTest entries covering rendering math, settings-resolution branch replay, layer diagnostics, body rotation and tracking recovery, menu input, queue handoffs, assembly-source parity, and the grenade and quaternion-return regressions. The two belt fixtures also run directly:
+The Linux x86-64 suite contains 51 CTest entries covering rendering math, settings-resolution branch replay, layer diagnostics, body rotation, locomotion heading and tracking recovery, menu input and pointer drag dispatch, the Index equipment-menu shortcut, scanner gesture ownership, physical stance, finger tracking and its runtime lifecycle, queue handoffs, assembly-source parity, and the belt reach/carry and quaternion-return regressions. The Lua/ABI fixtures also run directly:
 
 ```sh
 python3 tools/belt_tests/run_grenade_hold.py
+python3 tools/belt_tests/run_reach.py
 python3 tools/belt_tests/run_bone_rotation_abi.py
+python3 tools/belt_tests/run_holster.py
+python3 tools/belt_tests/run_weapon_carry.py
+python3 tools/belt_tests/run_reload_handoff.py
 ```
 
 The grenade fixture checks 21 cases, including invalid bone data and recovery into valid holds. The quaternion fixture checks 177 cases against checked-in pre-fix source excerpts. It intentionally runs the old misaligned return-store in an isolated child process and requires that child to fault; core files are disabled for that child. Neither fixture reads Git history or game files. Use a Debug host-test build so the assertion-based C++ checks remain enabled.

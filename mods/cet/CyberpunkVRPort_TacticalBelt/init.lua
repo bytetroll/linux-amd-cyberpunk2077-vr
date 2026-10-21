@@ -3332,6 +3332,7 @@ end
 -- THE GRENADE IN THE HAND lives in grenade/ -- its code, and the finger poses lifted out of the
 -- game's own throw. Its state stays in S.grab here,
 -- because applyElements and playerPlane both have to know what is being held.
+local updateHighlight
 local GRENADE = (function()
     local ok, m = pcall(function() return require("grenade/grenade") end)
     if not ok or not m then return nil end
@@ -3340,6 +3341,12 @@ local GRENADE = (function()
         propItem = propItem, propAllowSlot = propAllowSlot, playerPlane = playerPlane,
         activeGrenade = activeGrenadeName,
         eulerQuat = eulerQuat, transactions = transactions,
+        grabTarget = function(side)
+            -- A grip edge must use this frame's palm and enabled belt pieces,
+            -- even when the cosmetic highlight scan is between ticks.
+            updateHighlight(0, side)
+            return S.litHand[side]
+        end,
     })
     return m
 end)()
@@ -3394,28 +3401,35 @@ local function updateMagReach()
     end
 end
 
-local function updateHighlight(dt)
+updateHighlight = function(dt, forceSide)
     if not CFG.highlight then
-        if S.lit ~= nil then S.litHand[0], S.litHand[1] = nil, nil applyLit({}) end
+        S.litHand[0], S.litHand[1] = nil, nil
+        applyLit({})
         return
     end
-    S.hlAcc = S.hlAcc + (dt or 0.016)
-    local period = 1.0 / math.max(1.0, CFG.highlight_rate_hz)
-    if S.hlAcc < period then return end
-    S.hlAcc = 0.0
+    if forceSide == nil then
+        S.hlAcc = S.hlAcc + (dt or 0.016)
+        local period = 1.0 / math.max(1.0, CFG.highlight_rate_hz)
+        if S.hlAcc < period then return end
+        S.hlAcc = 0.0
+    end
 
-    if CFG.probe_devices then
+    if CFG.probe_devices and forceSide == nil then
         S.probeCount = reassertDevices()
     end
 
-    if next(S.comps) == nil then
-        if S.lit ~= nil then S.litHand[0], S.litHand[1] = nil, nil applyLit({}) end
+    if next(S.comps) == nil or type(VRPalmModelPos) ~= "function" then
+        S.litHand[0], S.litHand[1] = nil, nil
+        applyLit({})
         return
     end
-    if type(VRPalmModelPos) ~= "function" then return end
 
     local hx, hy, hz, qi, qj, qk, qr = hipsModelFrame()
-    if hx == nil then return end
+    if hx == nil then
+        S.litHand[0], S.litHand[1] = nil, nil
+        applyLit({})
+        return
+    end
 
     -- EACH HAND KEEPS ITS OWN ELEMENT. The two are resolved independently and the results are unioned,
     -- so reaching for a grenade with one hand and a magazine with the other lights both.
@@ -3424,7 +3438,7 @@ local function updateHighlight(dt)
     local nearest = nil
     local targets = nil
 
-    for side = 0, 1 do
+    for side = forceSide or 0, forceSide or 1 do
         local p = palmPoint(side)
         if p ~= nil then
             -- Both hands test the same components in the same hips frame.
@@ -3447,23 +3461,28 @@ local function updateHighlight(dt)
                     end
                 end
             end
-            local best, bestD = nil, nil
+            local held = S.litHand[side]
+            local best, bestD, heldD = nil, nil, nil
             for _, target in ipairs(targets) do
                 local dx, dy, dz = target.x - p.x, target.y - p.y, target.z - p.z
                 local d = math.sqrt(dx * dx + dy * dy + dz * dz)
-                if bestD == nil or d < bestD then best, bestD = target.host, d end
+                -- Measure the held row too: the nearest row can change while
+                -- neither row is close enough to enter. The old target must
+                -- still leave at its own release radius in that case.
+                local row = OFFSET_GROUP[target.host] or target.host
+                if d == d and d < math.huge then
+                    if bestD == nil or d < bestD then best, bestD = row, d end
+                    if row == held and (heldD == nil or d < heldD) then heldD = d end
+                end
             end
-            -- The row a piece belongs to is what the hand is really reaching for.
-            if best ~= nil then best = OFFSET_GROUP[best] or best end
             -- Hysteresis is per hand: it holds what THIS hand already has until that one is left
             -- behind, which is what stops a mark flickering between two elements of equal distance.
-            local held = S.litHand[side]
-            if best == nil or bestD == nil then
-                S.litHand[side] = nil
-            elseif held == best then
-                if bestD > leave then S.litHand[side] = nil end
-            elseif bestD <= enter then
+            if bestD ~= nil and bestD <= enter then
                 S.litHand[side] = best
+            elseif heldD ~= nil and heldD <= leave then
+                S.litHand[side] = held
+            else
+                S.litHand[side] = nil
             end
             if bestD ~= nil and (nearest == nil or bestD < nearest) then nearest = bestD end
             S.handSide = S.handSide or {}
@@ -3473,7 +3492,7 @@ local function updateHighlight(dt)
             S.litHand[side] = nil
         end
     end
-    S.handDist = nearest
+    if forceSide == nil then S.handDist = nearest end
 
     local want = {}
     for side = 0, 1 do

@@ -21,6 +21,7 @@
 #include "Render/ColorBlit.hpp"
 #include "Runtimes/HudQuad.hpp"
 #include "Runtimes/RoomscaleMovement.hpp"
+#include "Runtimes/LocomotionHeading.hpp"
 #include "Runtimes/TrackingReset.hpp"
 #include "Runtimes/HandPublication.hpp"
 #include "Runtimes/FrameAim.hpp"
@@ -63,6 +64,12 @@ struct VRControllerState {
     bool     rightHandValid = false;
     // Input availability is independent of the controller's tracked pose.
     bool     rightTriggerActive = false;
+    bool     leftGripActive = false;
+    bool     rightGripActive = false;
+    float    hubMenuForce = 0.f;
+    bool     hubMenuActive = false;
+    uint64_t inputStampMs = 0;
+    bool     inputSyncValid = false; // XR_SUCCESS, not merely a fresh pose/timestamp
 };
 
 extern "C" int GetXrRuntimeMode();
@@ -812,11 +819,13 @@ public:
     void RequestVRDiag() { m_logDiagReq.fetch_add(1, std::memory_order_relaxed); }
 
     // HMD yaw (radians) relative to the recenter base (= body forward), derived
-    // from relOri. Used for head-oriented locomotion (rotate on-foot move vector).
+    // from a coherent relOri sample. Vertical/invalid poses hold the last heading.
+    // Used for head-oriented locomotion (rotate on-foot move vector).
     float GetHmdYawRelToBody() const;
     // Same idea for a controller (side: 0=left, 1=right). Used for hand-oriented
     // locomotion (character walks the way the chosen controller points). Returns
-    // 0 if the controller pose isn't valid this frame.
+    // the last usable heading during tracking loss/vertical aim, or HMD heading
+    // until a usable controller heading exists in the current tracking origin.
     float GetHandYawRelToBody(int side) const;
 
     // Body-realign support: rotate the recenter base about the vertical axis by
@@ -924,15 +933,18 @@ private:
     XrAction m_primaryButtonAction = XR_NULL_HANDLE;     // Bool, per hand (X / A)
     XrAction m_secondaryButtonAction = XR_NULL_HANDLE;   // Bool, per hand (Y / B)
     XrAction m_menuButtonAction = XR_NULL_HANDLE;        // Bool, global menu/start action
+    XrAction m_hubMenuAction = XR_NULL_HANDLE;           // Float, Index left touchpad pressure
     cvr::input::SteamFrameActions m_steamFrameActions{};
     XrPath m_handPaths[2] = { XR_NULL_PATH, XR_NULL_PATH };
     XrSpace m_handSpaces[2] = { XR_NULL_HANDLE, XR_NULL_HANDLE };
     // Latest controller snapshot, owned by the frame thread.
     mutable std::mutex m_inputMutex;
     VRControllerState m_controllerState{};
-    // Yaws (radians, recenter-base relative) for hand-oriented locomotion.
-    std::atomic<float> m_handYawRelToBody[2]{ {0.0f}, {0.0f} };
-    std::atomic<bool>  m_handYawValid[2]{ {false}, {false} };
+    // Published as complete headings rather than four independently read
+    // quaternion atomics. The frame loop owns updates; XInput only reads.
+    mutable std::mutex m_locomotionHeadingMutex;
+    cvr::tracking::LocomotionHeading m_hmdHeading{},m_handHeading[2]{};
+    float m_handYawRelToBody[2]{}; // filtered aim yaw, same mutex as its validity/origin
     struct TrackingPoseFilterState {
         bool initialized = false;
         XrVector3f position{};

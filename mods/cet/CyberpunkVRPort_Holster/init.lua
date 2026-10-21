@@ -35,6 +35,7 @@ local RANGED_KW = { "pistol", "revolver", "holster" }
 local TransactionSystem = nil
 local SlotIDs = nil
 local WeaponRightSlot = nil
+local WeaponLeftSlot = nil
 local cache = { L = nil, R = nil }
 local sinceScan = 0.0
 local rightGripPrev = 0
@@ -65,9 +66,23 @@ local function rescan(pl)
     cache.R = classifySide(pl, RIGHT_SLOTS)
 end
 
+local function weaponInSlot(pl, slot)
+    local item = TransactionSystem:GetItemInSlot(pl, slot)
+    -- WeaponLeft also carries magazines and smoking props. Only weapons count as held.
+    if item and item:IsA(CName.new("gameweaponObject")) then return item end
+    return nil
+end
+
+local function distance(slot)
+    local value = GetVRSharedSlot(slot)
+    if type(value) ~= 'number' or value ~= value or value < 0 then return math.huge end
+    return value
+end
+
 registerForEvent('onInit', function()
     TransactionSystem = Game.GetTransactionSystem()
     WeaponRightSlot = TweakDBID.new("AttachmentSlots.WeaponRight")
+    WeaponLeftSlot = TweakDBID.new("AttachmentSlots.WeaponLeft")
     SlotIDs = {}
     for _, s in ipairs(LEFT_SLOTS)  do SlotIDs[s] = TweakDBID.new(s) end
     for _, s in ipairs(RIGHT_SLOTS) do SlotIDs[s] = TweakDBID.new(s) end
@@ -79,7 +94,13 @@ registerForEvent('onUpdate', function(dt)
 
     if type(GetVRSharedSlot) ~= 'function' then return end
     local pl = Game.GetPlayer()
-    if not pl then return end
+    if not pl or not TransactionSystem then rightGripPrev = 0; return end
+
+    local g = ((GetVRSharedSlot(49) or 0) > 0.5) and 1 or 0
+    local edge = (g == 1 and rightGripPrev == 0)
+    rightGripPrev = g
+    -- The scanner owns both grips through its release tail. Never replay that squeeze as a draw.
+    if (GetVRSharedSlot(69) or 0) > 0.5 then return end
 
     -- While a cigarette is in the hands it occupies the WeaponRight slot -- which this mod would
     -- read as a held weapon -- and the right grip is what puts the cig in the mouth. Both of those
@@ -93,24 +114,15 @@ registerForEvent('onUpdate', function(dt)
     -- raised on PROXIMITY -- before the press -- so there is no edge to race.
     local wheelArmed = GetVRSharedSlot(163)
     if wheelArmed and (math.floor(wheelArmed) % 2) == 1 then
-        rightGripPrev = (GetVRSharedSlot(49) > 0.5) and 1 or 0   -- swallow the edge, don't queue it
         return
     end
 
     sinceScan = sinceScan + dt
     if sinceScan >= 1.0 then sinceScan = 0.0; rescan(pl) end
 
-    local g = (GetVRSharedSlot(49) > 0.5) and 1 or 0
-    local edge = (g == 1 and rightGripPrev == 0)
-    rightGripPrev = g
     if not edge or cooldown > 0 then return end
 
-    local dR = GetVRSharedSlot(20)
-    local dL = GetVRSharedSlot(21)
-    local dB = GetVRSharedSlot(22)
-    if dR < 0 then dR = 1e9 end
-    if dL < 0 then dL = 1e9 end
-    if dB < 0 then dB = 1e9 end
+    local dR, dL, dB = distance(20), distance(21), distance(22)
 
     -- Which body zone is the right hand reaching to? (shared by both modes)
     -- B needs a CLEAR win over the right hip: the shoulder anchor sits close to a
@@ -132,42 +144,42 @@ registerForEvent('onUpdate', function(dt)
     -- THE LEFT SLOT IS CHECKED TOO: the weapon carry system moves a heavy weapon (katana, rifle) to
     -- AttachmentSlots.WeaponLeft while the left hand holds it (CyberpunkVR_CarryLeft = 1). A weapon
     -- there is still "in hand" for holster purposes — reaching to the left hip should put it away.
-    local WeaponLeftSlot = TweakDBID.new("AttachmentSlots.WeaponLeft")
-    local rightItem = TransactionSystem:GetItemInSlot(pl, WeaponRightSlot)
-    local leftItem  = TransactionSystem:GetItemInSlot(pl, WeaponLeftSlot)
+    local rightItem = weaponInSlot(pl, WeaponRightSlot)
+    local leftItem  = weaponInSlot(pl, WeaponLeftSlot)
     local hasWeapon = (rightItem ~= nil) or (leftItem ~= nil)
     -- Prefer the right item for classification; if it is nil, the left item is the one in hand.
     local heldItem = rightItem or leftItem
 
+    -- Putting away a held weapon must work even without a matching VisualHolster outfit item.
+    -- Clothing classification selects what to DRAW; it must not prevent a right-hip holster.
+    if hasWeapon then
+        if WeaponObject.IsMelee(heldItem:GetItemID()) then
+            pl:VRHolsterMelee()
+        else
+            pl:VRUnequipWeapon()
+        end
+        lastZone = nil
+        cooldown = EQUIP_COOLDOWN_S
+        spdlog.info("[Holster] -> HOLSTER (held weapon), zone=" .. zone)
+        return
+    end
+
     -- shared[23]: 0/unset = immersive (classify by visual holster), 1 = simple slot mapping.
     -- (Inverted on the plugin side so the zero-initialised shared block defaults to immersive.)
-    local simpleHolsters = (GetVRSharedSlot(23) > 0.5)
+    local simpleHolsters = ((GetVRSharedSlot(23) or 0) > 0.5)
 
     if simpleHolsters then
         -- SIMPLE SLOT MODE: visual holsters ignored. Over-shoulder/back = EquipmentSlot1,
         -- right hip = EquipmentSlot2, left hip = EquipmentSlot3.
-        -- WEAPON IN HAND -> ALWAYS HOLSTER, in ANY zone. The old "same zone = holster,
-        -- other zone = equip that slot" rule swapped slots 1<->2 whenever the fuzzy
-        -- B-vs-R classification flipped between presses (log-proven). Gesture swapping
-        -- is not worth that: put away first, then draw from the zone you want.
-        spdlog.info(string.format("[Holster] simple grip zone=%s dR=%.2f dL=%.2f dB=%.2f hasWpn=%s",
-            tostring(zone), dR, dL, dB, tostring(hasWeapon)))
-        if hasWeapon then
-            local isMelee = (classify(TDBID.ToStringDEBUG(heldItem:GetItemID():GetTDBID())) == "melee")
-            if isMelee then pl:VRHolsterMelee() else pl:VRUnequipWeapon() end
-            lastZone = nil
-            spdlog.info("[Holster] simple -> HOLSTER")
+        if zone == "B" then
+            pl:VREquipPrimaryWeapon()
+        elseif zone == "R" then
+            pl:VREquipWeaponSlot2()
         else
-            if zone == "B" then
-                pl:VREquipPrimaryWeapon()     -- EquipmentSlot1
-            elseif zone == "R" then
-                pl:VREquipWeaponSlot2()        -- EquipmentSlot2
-            else
-                pl:VREquipWeaponSlot3()        -- EquipmentSlot3
-            end
-            lastZone = zone
-            spdlog.info("[Holster] simple -> equip slot for zone " .. tostring(zone))
+            pl:VREquipWeaponSlot3()
         end
+        lastZone = zone
+        spdlog.info("[Holster] simple -> equip slot for zone " .. zone)
         cooldown = EQUIP_COOLDOWN_S
         return
     end
@@ -187,17 +199,7 @@ registerForEvent('onUpdate', function(dt)
     spdlog.info(string.format("[Holster] grip zone=%s cls=%s dR=%.2f dL=%.2f dB=%.2f hasWpn=%s",
         tostring(zone), tostring(cls), dR, dL, dB, tostring(hasWeapon)))
 
-    if hasWeapon then
-        -- WEAPON IN HAND -> ALWAYS HOLSTER (any zone) -- see the simple-mode comment:
-        -- zone flip between presses swapped weapons instead of putting them away.
-        -- Melee uses VRHolsterMelee: it suppresses the VR swing (so reaching to the holster doesn't fire
-        -- an attack that blocks the unequip) and then sends the same UnequipWeapon the keyboard B does.
-        -- Ranged never swings, so the plain UnequipWeapon already works for it.
-        local isMelee = (classify(TDBID.ToStringDEBUG(heldItem:GetItemID():GetTDBID())) == "melee")
-        if isMelee then pl:VRHolsterMelee() else pl:VRUnequipWeapon() end
-        lastZone = nil
-        spdlog.info("[Holster] -> HOLSTER (held weapon)")
-    elseif cls == "melee" then
+    if cls == "melee" then
         pl:VREquipMeleeWeapon(); lastZone = zone
         spdlog.info("[Holster] -> equip melee")
     elseif cls == "primary" then

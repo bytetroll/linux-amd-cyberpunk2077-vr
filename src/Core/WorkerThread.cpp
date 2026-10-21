@@ -9,6 +9,7 @@
 // them is obvious. Adding a second thread here would mean the live controls could change under a poll
 // that had already read half of them.
 
+#include "Hooks/NativeMenuPointer.hpp"
 #include "Anim/ReloadPose.hpp"   // RestFingerTick
 #include "Anim/TwoHandGrip.hpp"  // TwoHandTick
 #include <windows.h>
@@ -147,6 +148,7 @@ DWORD WINAPI WorkerThread(LPVOID) {
     uint32_t loopCounter = 0;
 
     for (;;) {
+        cvr::input::MaintainNativeMenuPointer();
         PollLiveControls();
         // THE FAST PATH'S RECOVERY, and it costs nothing while nothing is wrong.
         //

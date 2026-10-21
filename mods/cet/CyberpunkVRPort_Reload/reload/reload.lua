@@ -16,6 +16,7 @@
 -- PROJECTED onto it is exactly the along-barrel rack distance, because a rotation preserves length -- so the bone's
 -- own local frame never has to be reconstructed.
 local M = {}
+local SLIDE_HANDOFF = require('reload/slide_handoff')
 
 local CONFIGS = {}
 do
@@ -375,7 +376,7 @@ end
 
 local function handModel(side)
     local h = VRHandRawModel(side)
-    if not h then return nil end
+    if not h or (h.w or 0) <= 0.5 then return nil end
     return h.x, h.y, h.z
 end
 
@@ -1103,6 +1104,7 @@ local function magHome()
     end
     magS.magnet = 0
     magS.state, magS.hand, magS.t, magS.armed = 'in', nil, 0, false
+    magS.slideHandoff = nil
     -- ...and the belt gets its magazine back. Holstering mid-grab used to be enough to leave the pouch
     -- empty with nothing in the hand to show for it.
     magS.fromBelt = false
@@ -1725,6 +1727,17 @@ function M.frame(weapon, slotComp, holder, dt)
                spz + gFz * x + gDz * y + gSz * z
     end
 
+    -- Store the post-insertion wrist relative to the weapon, so walking or
+    -- rotating the whole gun cannot count as reaching from its well to its slide.
+    local function slideHandPoint(hand)
+        local x, y, z = handModel(hand)
+        if not x or not spx or not gDx then return nil end
+        x, y, z = x - spx, y - spy, z - spz
+        return x * gFx + y * gFy + z * gFz,
+               x * gDx + y * gDy + z * gDz,
+               x * gSx + y * gSy + z * gSz
+    end
+
     -- THE AMMO WATCH. An empty magazine means an empty chamber: the round is not drawn at all (so a dry gun shows
     -- no round through the port -- the user's ask), nothing can be ejected, and nothing chambers. Reloading in the
     -- game refills the magazine, and the round reappears by itself here. Note the module can only READ the count;
@@ -1884,7 +1897,7 @@ function M.frame(weapon, slotComp, holder, dt)
             -- close enough for both preview zones to contain the same wrist, and then the two fought over the finger
             -- pose every frame -- each fading its own in and the other's out (seen as two blends at once at the well).
             -- While a magazine is held, only the magazine's pose may run.
-            if not gripOf(free) then magS.gripLock = false end
+            if not gripOf(free) then magS.gripLock, magS.slideHandoff = false, nil end
             local best, bestStyle, bestD = nil, '-', 1e9
             local dbgRaw, dbgAng, dbgPer = nil, nil, nil
             if sc.grips and magS.state ~= 'hand' then
@@ -1942,18 +1955,20 @@ function M.frame(weapon, slotComp, holder, dt)
             if best and bestD <= (sc.previewRadius or 0.05) and not magNearer then
                 fadeIn(free, best)                                   -- the preview: fingers curl in over blendTime
                 magS.slideHasPose = true
-                -- A SQUEEZE BELONGS TO WHATEVER IT STARTED ON. `gripLock` already says "this squeeze is spent" for
-                -- the magazine -- it is what stops a still-closed hand pulling the magazine straight back out of the
-                -- well the moment it clicks in. The slide never honoured it, so that same held squeeze rolled
-                -- straight on to the slide the instant the magazine was done: "после магазина сразу на затвор
-                -- переключается при держащем грипе". Now it is one lock for both parts, cleared by letting go.
-                if gripOf(free) and not magS.gripLock then
+                -- The insertion squeeze stays consumed at the well. Moving the
+                -- same hand to a distinct slide target is an intentional handoff;
+                -- it need not fully open an Index grip before racking the pistol.
+                local px, py, pz = slideHandPoint(free)
+                local handoff = magS.state == 'in' and SLIDE_HANDOFF.canTake(
+                    magS.slideHandoff, free, px, py, pz, bestD, sc.previewRadius or 0.05)
+                if gripOf(free) and (not magS.gripLock or handoff) then
                     -- GRAB, latching the hand (see the grabbed branch for why)
                     slideS.grabbed, slideS.releasing = true, false
                     slideS.hand = free
                     slideS.grip = best
                     slideS.hrx, slideS.hry, slideS.hrz = hx, hy, hz  -- rack reference
                     magS.gripLock = true                             -- ...and spend it, so the magazine cannot have it
+                    magS.slideHandoff = nil
                     slideS.drain = 0.0                               -- a hand on it outranks a drain in progress
                     -- START FROM WHERE THE SLIDE IS. On the catch that is 40 mm back, not zero: writing zero here
                     -- is what snapped it shut the moment the grip closed.
@@ -3340,6 +3355,9 @@ function M.frame(weapon, slotComp, holder, dt)
                 itemDrop(0, 'AttachmentSlots.WeaponLeft'); itemDrop(1, 'AttachmentSlots.WeaponRight')
                 if H then magMagnet(H, 0) end
                 magS.state, magS.hand, magS.armed = 'in', nil, false
+                if H ~= nil then
+                    magS.slideHandoff = SLIDE_HANDOFF.record(H, slideHandPoint(H))
+                end
                 magS.depth = 0.0
                 magS.glide = nil
                 -- ...and these rounds are not to be dumped again until the gun has been shut on them. Only a
@@ -3789,6 +3807,7 @@ function M.frame(weapon, slotComp, holder, dt)
                         leadReset('glide')       -- a glide starts where it starts; nothing stepped to get there
                         magS.state, magS.hand, magS.armed = 'glide', nil, false
                         magS.gripLock = true                 -- this squeeze is used up; let go to take another
+                        magS.slideHandoff = SLIDE_HANDOFF.record(H, slideHandPoint(H))
                     else
                         seatMag(H)
                     end

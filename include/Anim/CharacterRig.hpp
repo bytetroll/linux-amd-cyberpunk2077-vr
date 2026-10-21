@@ -113,6 +113,7 @@ void VRIK_PlaceLadderUpper(uint8_t* boneBuf,const float* cameraTarget,const floa
 // No tuning arguments in gameplay: use the baked user-approved rung pose.
 // Explicit arguments remain for offline authoring/equivalence checks.
 void VRIK_ApplyLadderFingers(uint8_t* boneBuf,int side,int kind,const float* curls=nullptr,const float (*adjustments)[6]=nullptr);
+void VRIK_ApplyTrackedFingers(uint8_t* boneBuf);
 extern float g_VRIKGirdleReach[2][4];
 void VRIK_Cross3(const float* a, const float* b, float* o);
 void VRIK_DampenTorsoWeaponPose(uint8_t* boneBuf);

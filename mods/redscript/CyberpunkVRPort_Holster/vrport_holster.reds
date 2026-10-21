@@ -81,10 +81,10 @@ public func VREquipWeaponSlot3() -> Void {
 // slot, because a heavy ranged weapon carried there (rifle, sniper) would otherwise stay attached.
 @addMethod(PlayerPuppet)
 public func VRUnequipWeapon() -> Void {
-  let ts = GameInstance.GetScriptableSystemsContainer(this.GetGame()).Get(n"TransactionSystem") as TransactionSystem;
+  let ts = GameInstance.GetTransactionSystem(this.GetGame());
   if IsDefined(ts) {
-    let leftSlot = TDBID.Create(n"AttachmentSlots.WeaponLeft");
-    if IsDefined(ts.GetItemInSlot(this, leftSlot)) {
+    let leftSlot = t"AttachmentSlots.WeaponLeft";
+    if IsDefined(ts.GetItemInSlot(this, leftSlot) as WeaponObject) {
       ts.RemoveItemFromSlot(this, leftSlot, false);
     }
   }
@@ -111,11 +111,11 @@ public func VRHolsterMelee() -> Void {
   // Remove from the left carry slot first, so the EquipmentSystem request does not find it there.
   // The weapon is the same entity (shouldDestroyEntity=false), so this is just un-attaching it from
   // the left hand. With nothing in either slot the EquipmentSystem's UnequipWeapon is a no-op, but
-  // it still fires the holster animation and sound — the real work is the detachment above.
-  let ts = GameInstance.GetScriptableSystemsContainer(this.GetGame()).Get(n"TransactionSystem") as TransactionSystem;
+  // the left-slot detachment is already complete.
+  let ts = GameInstance.GetTransactionSystem(this.GetGame());
   if IsDefined(ts) {
-    let leftSlot = TDBID.Create(n"AttachmentSlots.WeaponLeft");
-    if IsDefined(ts.GetItemInSlot(this, leftSlot)) {
+    let leftSlot = t"AttachmentSlots.WeaponLeft";
+    if IsDefined(ts.GetItemInSlot(this, leftSlot) as WeaponObject) {
       ts.RemoveItemFromSlot(this, leftSlot, false);
     }
   }

@@ -15,6 +15,7 @@
 #include "Anim/SkeletonPolicy.hpp"
 #include "Anim/UpperBodyPosture.hpp"
 #include "Anim/BodyBend.hpp"
+#include "Anim/PhysicalStance.hpp"
 #include "Anim/LadderGripProfile.hpp"
 #include "Anim/LadderFingerTuning.hpp"
 #include "Anim/LadderRungPose.hpp"
@@ -23,9 +24,13 @@
 #include "Camera/CameraState.hpp"
 #include "Core/VrCoreShared.hpp"
 #include "Runtimes/OpenXRManager.hpp"
+#include "Runtimes/FingerTracking.hpp"
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <mutex>
+
+extern void Log(const char* fmt,...);
 
 static inline void VRIK_QuatExtractTwist(const float* q,const float* axis,float* outT);
 
@@ -2631,6 +2636,27 @@ void VRIK_ApplyLadderFingers(uint8_t* boneBuf,int side,int kind,const float* cur
         }
     }
 }
+extern "C" __declspec(dllexport) extern int CyberpunkVR_CarryLeft;
+void VRIK_ApplyTrackedFingers(uint8_t* boneBuf) {
+    if(!boneBuf)return;
+    for(int side=0;side<2;++side) {
+        if(!cvr::finger::FreeHand(side,g_hasWeaponEquipped,CyberpunkVR_CarryLeft!=0))continue;
+        cvr::finger::Pose pose{};
+        if(!cvr::finger::Tracking().Read(side,pose))continue;
+        for(int slot=0;slot<19;++slot) {
+            const auto& finger=cvr::ladder::profile::fingers[slot];
+            // Keep authored metacarpal placement, opposition, and every bone's
+            // translation. XR and Cyberpunk have different bind axes; measured
+            // joint bends retarget onto this rig's existing local flexion axis.
+            if(std::strncmp(finger.suffix,"InHand",6)==0)continue;
+            const int joint=finger.suffix[std::strlen(finger.suffix)-1]-'1';
+            const int bone=s_ladderFingers[side][slot];
+            if(joint<0 || joint>2 || bone<0 || bone>=g_VRBoneCount || !s_referenceValid[bone])continue;
+            auto* rotation=reinterpret_cast<float*>(boneBuf+bone*48+VRIK_ROT_OFF);
+            cvr::finger::LocalFlexion(s_referenceLocalRot[bone],pose.bend[finger.group][joint],rotation);
+        }
+    }
+}
 void VRIK_PlaceLadderUpper(uint8_t* boneBuf,const float* cameraTarget,const float* headRotation,int headIdx) {
     const int hips=g_VRHipsIdx;
     if(!boneBuf || !headRotation || hips<0 || hips>=g_VRBoneCount || headIdx<0 || headIdx>=g_VRBoneCount ||
@@ -2743,30 +2769,19 @@ void VRIK_PlaceBodyUnderHMD(uint8_t* boneBuf,
     if(headIdx<0 || headIdx>=g_VRBoneCount || !g_VRHeadReferenceValid)return;
     VRIK_BeginBodySolve(boneBuf);
     const float bendAngle=SharedPose(115)==2.0f ? SharedPose(114):0;
-    const float hingeDrop=cvr::body::HingeDrop(bendAngle);
     const float id[4]={0,0,0,1};
     // Native locomotion owns Root and leg local animation; VRIK owns Hips.
     // Real-life SQUAT: the game FPP camera height (camModelPos.z) is FIXED, so it can't tell when
     // the player physically crouches. shared[89] = the HMD's physical height rel the recenter base
     // (~0 standing, negative squatting); lower the upper-body anchor by that amount.
-    // Squat height: use the NECK-PIVOT height (shared[90]), which removes the optical-centre arc
-    // so looking DOWN no longer reads as a crouch (the #1 false-squat cause). Fall back to the raw
-    // HMD height [89] if the producer hasn't written [90]. Deadzone g_VRSquatThreshold then ignores
-    // small head bob; subtract it so the squat ramps from 0 smoothly.
-    float squatDrop = 0.0f;
-    if (g_pSharedHands) {
-        float hy = SharedPose(90);
-        if (hy == 0.0f) hy = SharedPose(89);
-        const float ordinaryDrop=-hy-g_VRSquatThreshold-hingeDrop;
-        // slot90 includes the neutral8cm neck-to-eye height. During a confirmed
-        // floor reach, remove that bias and use a small crouch threshold: the
-        // old20cm threshold kept the hips high enough to leave hands short.
-        const float reachDrop=-(hy+.08f)-.02f-hingeDrop;
-        const float reachWeight=cvr::body::BendWeight(bendAngle);
-        float drop=ordinaryDrop+(reachDrop-ordinaryDrop)*reachWeight;
-        if (drop > 0.0f) squatDrop = drop;
-        if (squatDrop > 0.7f) squatDrop = 0.7f;
-    }
+    // Neck-pivot height removes the optical-centre arc during head pitch.
+    // Its datum is the neutral eye, not the neutral neck; normalize that 8 cm
+    // bias before applying the crouch deadzone. Zero is a valid pivot height.
+    const float physicalHeadY=SharedPose(89),neckPivotY=SharedPose(90);
+    const float squatThreshold=g_VRSquatThreshold;
+    const float squatTarget=g_pSharedHands ?
+        cvr::body::PhysicalSquatDrop(neckPivotY,squatThreshold,bendAngle):0.0f;
+    float squatDrop=squatTarget;
     // Squat deadzone(2cm) + EMA(alpha=0.25) so sprint/jump head-bob doesn't twitch body+arms.
     // Small changes inside the deadband are frozen (ignore bob); larger real crouches ease in.
     // Shared via s_vrSharedSquatDrop so the ARM anchor uses the SAME smoothed squat as the body.
@@ -2780,6 +2795,20 @@ void VRIK_PlaceBodyUnderHMD(uint8_t* boneBuf,
         squatDrop = s_squatEMA;
     }
     s_vrSharedSquatDrop = squatDrop;
+    // Bounded, once/sec evidence from this solve's existing latched pose.
+    // Locomotion is an independent CET status, not part of that pose snapshot.
+    static std::atomic<uint64_t> diagLastMs{};
+    static std::atomic<unsigned> diagLines{};
+    const uint64_t diagNow=GetTickCount64();
+    uint64_t diagPrevious=diagLastMs.load(std::memory_order_relaxed);
+    if(g_handsStableValid && diagLines.load(std::memory_order_relaxed)<180 &&
+       diagNow-diagPrevious>=1000 && diagLastMs.compare_exchange_strong(diagPrevious,diagNow,std::memory_order_relaxed)) {
+        diagLines.fetch_add(1,std::memory_order_relaxed);
+        Log("[STANCE] tickMs=%llu poseSeq=%u hmdY=%.4f neckRawY=%.4f neckRelY=%.4f threshold=%.3f bend=%.3f squatTarget=%.4f squatApplied=%.4f nativeCameraZ=%.4f referenceCameraZ=%.4f referenceValid=%d locomotionIndependent=%d\n",
+            static_cast<unsigned long long>(diagNow),g_handsStableSeq,physicalHeadY,neckPivotY,
+            cvr::body::RelativeNeckHeight(neckPivotY),squatThreshold,bendAngle,squatTarget,squatDrop,
+            camModelPos[2],s_referenceCameraHeight,int(s_referenceCameraValid),int(g_VRLocomotionState));
+    }
     int chain[10],chainN=0;
     const int spineCount=std::clamp(static_cast<int>(g_VRSpineCount),0,8);
     for(int i=0;i<spineCount;++i)chain[chainN++]=g_VRSpineIdx[i];

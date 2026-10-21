@@ -94,7 +94,8 @@
 // ---------------------------------------------------------------------------
 // GRAVEYARD (dead -- reclaim before growing past [150])
 // ---------------------------------------------------------------------------
-//  [69]        never used (it was [67..69] once: a brief LT-inject melee-guard experiment, removed
+//  [69]        reclaimed: scanner owns grip input (see kScannerGripClaim below).
+//              Previously part of a brief LT-inject melee-guard experiment, removed
 //              the same session — the VR guard went STAT-driven, IsBlocking/IsDeflecting set
 //              directly by the CET weapon mod, no PSM Block state, no debuffs — so the input
 //              channel died unused).
@@ -150,6 +151,9 @@ constexpr int kSnapPreHeading = 148;
 // word alone is exactly what put the lighter on a millisecond timestamp.
 constexpr int kLeftTriggerAnalog = 154;
 constexpr int kLeftGripPressed   = 155;
+// Scanner chord owns both grips, including a held tail after cancellation.
+// Lua consumers reset edge state while set; [49]/[155] are also held at zero.
+constexpr int kScannerGripClaim  = 69;
 // The launcher's DEBUG checkbox, republished so the Lua side obeys the same switch as the plugin.
 // Without it every CET bridge logged per frame unconditionally: 26 449 lines and 5 MB from the
 // smoking one alone in a single session, and as much again from the weapon one. A log nobody can

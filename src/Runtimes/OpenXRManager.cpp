@@ -4,7 +4,9 @@
 #include "Anim/WheelGrab.hpp"   // the wheel-grab blends, for the hand smoothing below
 #include "Runtimes/OpenXRManager.hpp"
 #include "Runtimes/XrQueueBridge.hpp"
+#include "Runtimes/FingerTracking.hpp"
 #include "Hooks/RoomscaleMove.hpp"
+#include "Hooks/NativeMenuPointer.hpp"
 #include "Camera/CameraLink.hpp"
 #include "Runtimes/SimulatorRecenter.hpp"
 #include "Runtimes/TrackingFilter.hpp"
@@ -627,6 +629,7 @@ bool OpenXRManager::Init() {
                 }
             }
         }
+        cvr::finger::Tracking().EnableExtensions(props,extensions);
         Log("OpenXRManager: depth-layer (XR_KHR_composition_layer_depth) supported=%d\n", m_depthLayerSupported ? 1 : 0);
         Log("OpenXRManager: Steam Frame controller (%s) supported=%d\n",cvr::input::SteamFrameExtension,steamFrameEnabled?1:0);
     }
@@ -747,6 +750,7 @@ bool OpenXRManager::Init() {
             makeAction(m_primaryButtonAction,   XR_ACTION_TYPE_BOOLEAN_INPUT,  "primary_button",   "Primary Button (A/X)", true);
             makeAction(m_secondaryButtonAction, XR_ACTION_TYPE_BOOLEAN_INPUT,  "secondary_button", "Secondary Button (B/Y)", true);
             makeAction(m_menuButtonAction,      XR_ACTION_TYPE_BOOLEAN_INPUT,  "menu",             "Menu Button",          false);
+            makeAction(m_hubMenuAction,         XR_ACTION_TYPE_FLOAT_INPUT,    "hub_menu",         "Equipment Menu",       true);
             if(steamFrameEnabled)m_steamFrameActions.Create(makeAction);
         }
         Log("OpenXRManager[Input]: gameplay action set %s (xr_input_actions=%d)\n",
@@ -844,7 +848,8 @@ bool OpenXRManager::Init() {
             { m_menuButtonAction,      "/user/hand/left/input/menu/click" },
         });
 
-        // -- Valve Index: A/B on both hands, system as menu --
+        // -- Valve Index: A/B on both hands, left touchpad pressure opens the hub.
+        // The system button may be reserved by SteamVR and unavailable to apps.
         suggest("/interaction_profiles/valve/index_controller", {
             { m_handPoseAction,        "/user/hand/left/input/grip/pose" },
             { m_handPoseAction,        "/user/hand/right/input/grip/pose" },
@@ -863,6 +868,7 @@ bool OpenXRManager::Init() {
             { m_secondaryButtonAction, "/user/hand/left/input/b/click" },
             { m_secondaryButtonAction, "/user/hand/right/input/b/click" },
             { m_menuButtonAction,      "/user/hand/left/input/system/click" },
+            { m_hubMenuAction,         "/user/hand/left/input/trackpad/force" },
         });
 
         // -- HTC Vive Wand: no A/B/X/Y, no thumbstick (touchpad as v2f), grip is bool --
@@ -1027,6 +1033,7 @@ bool OpenXRManager::InitGraphics(ID3D12Device* device, ID3D12CommandQueue* queue
         }
     }
 
+    cvr::finger::Tracking().Start(m_instance,m_systemId,m_session);
     m_stopFrameThread.store(false, std::memory_order_relaxed);
     if (!m_frameThread) {
         m_frameThread = CreateThread(nullptr, 0, &OpenXRManager::SubmitThreadThunk, this, 0, nullptr);
@@ -1060,6 +1067,7 @@ bool OpenXRManager::BeginSession() {
 
 void OpenXRManager::EndSession() {
     if (m_session == XR_NULL_HANDLE || !m_sessionRunning.load(std::memory_order_relaxed)) return;
+    cvr::finger::Tracking().Clear();
     xrEndSession(m_session);
     m_sessionRunning.store(false, std::memory_order_relaxed);
     Log("OpenXRManager: Session ended.\n");
@@ -1171,23 +1179,15 @@ void OpenXRManager::SetWeaponOffsets(float pitch, float yaw, float roll, float d
 }
 
 float OpenXRManager::GetHmdYawRelToBody() const {
-    // relOri (m_ori*) is the HMD orientation relative to the recenter base, in XR
-    // space (Y up). Extract the heading/yaw about the Y axis.
-    float x = m_oriX.load(std::memory_order_relaxed);
-    float y = m_oriY.load(std::memory_order_relaxed);
-    float z = m_oriZ.load(std::memory_order_relaxed);
-    float w = m_oriW.load(std::memory_order_relaxed);
-    return std::atan2(2.0f * (w * y + x * z), 1.0f - 2.0f * (y * y + z * z));
+    std::lock_guard lock(m_locomotionHeadingMutex);
+    return m_hmdHeading.Value(GetTrackingOriginSerial());
 }
 
 float OpenXRManager::GetHandYawRelToBody(int side) const {
     if (side < 0 || side > 1) return 0.0f;
-    if (!m_handYawValid[side].load(std::memory_order_relaxed)) {
-        // Fall back to HMD heading so locomotion doesn't snap to 0 when a
-        // controller drops tracking mid-step.
-        return GetHmdYawRelToBody();
-    }
-    return m_handYawRelToBody[side].load(std::memory_order_relaxed);
+    std::lock_guard lock(m_locomotionHeadingMutex);
+    const auto origin=GetTrackingOriginSerial();
+    return m_handHeading[side].Valid(origin)?m_handYawRelToBody[side]:m_hmdHeading.Value(origin);
 }
 
 bool OpenXRManager::GetBodyYawFromHands(float* outYaw) const {
@@ -2186,6 +2186,7 @@ void OpenXRManager::FlushHandsToShared(const OpenXRHeadPose* frameHead, XrTime f
 
 
 void OpenXRManager::Shutdown() {
+    cvr::input::MaintainNativeMenuPointer(true);
     RemoveSimulatorRecenterHook();
     std::lock_guard<std::mutex> initLock(m_initMutex);
     m_stopFrameThread.store(true, std::memory_order_relaxed);
@@ -2246,6 +2247,7 @@ void OpenXRManager::Shutdown() {
     }
     m_eyeSwapchains.clear();
 
+    cvr::finger::Tracking().Stop();
     for (int i = 0; i < 2; ++i) {
         if (m_handSpaces[i] != XR_NULL_HANDLE) {
             xrDestroySpace(m_handSpaces[i]);
@@ -2288,6 +2290,7 @@ void OpenXRManager::Shutdown() {
     m_primaryButtonAction = XR_NULL_HANDLE;
     m_secondaryButtonAction = XR_NULL_HANDLE;
     m_menuButtonAction = XR_NULL_HANDLE;
+    m_hubMenuAction = XR_NULL_HANDLE;
     m_steamFrameActions = {};
 
     m_views.clear();
@@ -2414,6 +2417,11 @@ void OpenXRManager::Shutdown() {
     }
     m_initialized = false;
     m_poseValid.store(false, std::memory_order_relaxed);
+    {
+        std::lock_guard lock(m_locomotionHeadingMutex);
+        m_hmdHeading.Reset();
+        for(auto& heading:m_handHeading)heading.Reset();
+    }
     {
         std::lock_guard<std::mutex> renderLock(m_renderPoseMutex);
         m_basePoseSet = false;

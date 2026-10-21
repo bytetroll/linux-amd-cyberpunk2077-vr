@@ -21,6 +21,9 @@
 #include "Hooks/LadderInput.hpp"
 #include "Hooks/InputPacketSequence.hpp"
 #include "Hooks/NativeMenuInput.hpp"
+#include "Hooks/NativeMenuPointer.hpp"
+#include "Hooks/ScannerInput.hpp"
+#include "Hooks/HubMenuInput.hpp"
 #include "Hooks/AnalogStick.hpp"
 #include "Hooks/KeypadInput.hpp"
 #include "Hooks/CyberwareChord.hpp"
@@ -111,10 +114,12 @@ extern "C" __declspec(dllexport) int32_t CyberpunkVR_ScannerExitMs  = 250;
 // latch and the port keeps LB asserted itself: squeeze at the ear to open, squeeze at the ear again
 // to close, hand free in between. 0 restores the original hold.
 extern "C" __declspec(dllexport) int32_t CyberpunkVR_ScannerToggle = 1;
-// DUAL-Grip SCANNER: both grips together open the scanner, release both to close it.
-// This replaces the ear-zone gesture and makes scanner entry/exit consistent with other
-// VR hold-gestures (reload, two-hand grip). 0 = ear-zone (default), 1 = dual-grip.
+// D-pad Up owns scanner toggling by default, leaving grips available to items.
+// The optional dual-grip mode requires D-pad mode to be disabled first.
+extern "C" __declspec(dllexport) int32_t CyberpunkVR_ScannerDpadToggle = 1;
 extern "C" __declspec(dllexport) int32_t CyberpunkVR_ScannerDualGrip = 0;
+extern "C" __declspec(dllexport) int32_t CyberpunkVR_ScannerDualToggle = 1;
+extern "C" __declspec(dllexport) extern int CyberpunkVR_TwoHandActive;
 // THE HACK LIST ON THE LEFT STICK, up and down, at the threshold every other gesture in this file
 // fires at. It REPLACES the face buttons for paging -- X and Y sat under the thumb of the hand that is
 // already squeezing a grip at the ear, which is the reach the one-handed scanner exists to avoid, so X
@@ -246,6 +251,8 @@ static void SendZoomKey(bool zoomIn) {
 // Extended-key flag for the same reason as the zoom's: the arrows ARE extended keys, and down+up in one
 // call because the game consumes raw input per frame and a press that never releases repeats by itself.
 static void SendListKey(bool up) {
+    DWORD process=0;GetWindowThreadProcessId(GetForegroundWindow(),&process);
+    if(process!=GetCurrentProcessId())return;
     INPUT in[2] = {};
     in[0].type = INPUT_KEYBOARD;
     in[0].ki.wVk = up ? VK_UP : VK_DOWN;
@@ -276,6 +283,73 @@ static cvr::input::NativeMenuTriggerResult UpdateNativeMenuTrigger(bool menu, fl
     static cvr::input::NativeMenuTrigger input;
     std::lock_guard lock(mutex);
     return input.Update(menu, trigger, available);
+}
+
+namespace { std::atomic<bool> scannerOwnsGrips{}; }
+bool cvr::input::ScannerOwnsGrips() { return scannerOwnsGrips.load(std::memory_order_relaxed); }
+static cvr::input::ScannerGripResult UpdateScannerGrips(const VRControllerState* vr,bool allowed,bool busy=false) {
+    static std::mutex mutex;
+    static cvr::input::DualGripScanner input;
+    std::lock_guard lock(mutex);
+    const auto now=GetTickCount64();
+    const bool available=vr && vr->leftGripActive && vr->rightGripActive &&
+        vr->inputStampMs && now>=vr->inputStampMs && now-vr->inputStampMs<=250;
+    const auto result=input.Update(allowed && CyberpunkVR_ScannerDualGrip!=0 && CyberpunkVR_ScannerDpadToggle==0,available,busy,
+        vr?vr->leftGrip:0.f,vr?vr->rightGrip:0.f,CyberpunkVR_ScannerDualToggle!=0);
+    scannerOwnsGrips.store(result.claimed,std::memory_order_relaxed);
+    OpenXRManager::Get().SetSharedSlot(vrshared::kScannerGripClaim,result.claimed?1.f:0.f);
+    static bool lastActive=false,lastClaimed=false;
+    static unsigned lines=0;
+    if(lines<32 && (result.active!=lastActive || result.claimed!=lastClaimed)) {
+        Log("[scannerinput] active=%d gripsOwned=%d allowed=%d available=%d busy=%d dual=%d toggle=%d sample=%u/32\n",
+            int(result.active),int(result.claimed),int(allowed),int(available),int(busy),
+            CyberpunkVR_ScannerDualGrip,CyberpunkVR_ScannerDualToggle,++lines);
+    }
+    lastActive=result.active;lastClaimed=result.claimed;
+    return result;
+}
+static cvr::input::ScannerDpadResult UpdateScannerDpad(const VRControllerState* vr,bool gameplay,bool allowed) {
+    static std::mutex mutex;
+    static cvr::input::DpadScannerToggle input;
+    std::lock_guard lock(mutex);
+    const auto now=GetTickCount64();
+    // A focused, fresh input snapshot gates the chord independently of grip
+    // actions; unavailable grip sensors must not disable D-pad scanning.
+    const bool available=vr && vr->inputSyncValid && vr->inputStampMs &&
+        now>=vr->inputStampMs && now-vr->inputStampMs<=250;
+    const auto result=input.Update(CyberpunkVR_ScannerDpadToggle!=0,gameplay,allowed,available,
+        vr && (vr->buttons&1)!=0);
+    static bool previous=false;
+    static unsigned lines=0;
+    if(result.active!=previous && lines<32)
+        Log("[scannerinput] dpadUp active=%d available=%d allowed=%d sample=%u/32\n",
+            int(result.active),int(available),int(allowed),++lines);
+    previous=result.active;
+    return result;
+}
+static int UpdateScannerNavigation(bool enabled,float stick=0.f,bool up=false,bool down=false) {
+    static std::mutex mutex;
+    static cvr::input::ScannerNavigation input;
+    std::lock_guard lock(mutex);
+    return input.Update(enabled,stick,up,down,CyberpunkVR_ScannerStickNavFire,CyberpunkVR_ScannerStickNavRearm);
+}
+static bool UpdateHubMenuButton(const VRControllerState* vr,bool enabled) {
+    static std::mutex mutex;
+    static cvr::input::HubMenuPress input;
+    std::lock_guard lock(mutex);
+    const auto now=GetTickCount64();
+    const bool available=vr && vr->hubMenuActive && vr->inputStampMs &&
+        now>=vr->inputStampMs && now-vr->inputStampMs<=250;
+    DWORD foregroundProcess=0;
+    if(enabled)GetWindowThreadProcessId(GetForegroundWindow(),&foregroundProcess);
+    const bool pressed=input.Update(enabled && foregroundProcess==GetCurrentProcessId(),available,
+        vr?vr->hubMenuForce:0.f,now);
+    static bool previous=false;
+    static unsigned lines=0;
+    if(pressed && !previous && lines<16)
+        Log("[hubmenu] left touchpad -> native Start pulse sample=%u/16\n",++lines);
+    previous=pressed;
+    return pressed;
 }
 
 static void PublishMergedPacket(XINPUT_STATE* state, const NativeMenuInputTrace& input) {
@@ -310,25 +384,28 @@ DWORD WINAPI HookedXInputGetState(DWORD dwUserIndex, XINPUT_STATE* pState) {
 
     if (!pState) return r;
     if (dwUserIndex != 0) return r;
-    if (g_liveControls.xrXInputHook == 0) { UpdateNativeMenuTrigger(false,0,false);cvr::quest::SuspendManualClueInput();cvr::swimming::ResetInput();cvr::ladder::ResetInput();return r; }
+    if (g_liveControls.xrXInputHook == 0) { UpdateScannerDpad(nullptr,false,false);UpdateHubMenuButton(nullptr,false);cvr::input::UpdateNativeMenuPointer(false,false,0,false);UpdateScannerGrips(nullptr,false);UpdateNativeMenuTrigger(false,0,false);cvr::quest::SuspendManualClueInput();cvr::swimming::ResetInput();cvr::ladder::ResetInput();return r; }
 
     VRControllerState vr{};
-    if (!OpenXRManager::Get().GetControllerState(&vr)) { UpdateNativeMenuTrigger(false,0,false);cvr::quest::SuspendManualClueInput();cvr::swimming::ResetInput();cvr::ladder::ResetInput();return r; }
+    if (!OpenXRManager::Get().GetControllerState(&vr)) { UpdateScannerDpad(nullptr,false,false);UpdateHubMenuButton(nullptr,false);cvr::input::UpdateNativeMenuPointer(false,false,0,false);UpdateScannerGrips(nullptr,false);UpdateNativeMenuTrigger(false,0,false);cvr::quest::SuspendManualClueInput();cvr::swimming::ResetInput();cvr::ladder::ResetInput();return r; }
     const bool overlayCapture = cvr::vrui::CapturesInput();
+    if(UpdateHubMenuButton(&vr,!overlayCapture))vr.buttons|=XINPUT_GAMEPAD_START;
     const int menuMode = g_menuModeValue;
     const float rawRightTrigger = vr.rightTrigger;
     // Leave finger-curl publication raw; only the game's input sees a consumed
     // menu trigger, including the held tail of a press that leaves the menu.
+    const bool pointerOwns=cvr::input::UpdateNativeMenuPointer(menuMode!=0,overlayCapture,rawRightTrigger,vr.rightTriggerActive);
     const auto menuTrigger = UpdateNativeMenuTrigger(menuMode != 0 && !overlayCapture, rawRightTrigger, vr.rightTriggerActive);
-    const NativeMenuInputTrace menuTrace{menuMode,overlayCapture,vr.buttons,rawRightTrigger,vr.rightTriggerActive,menuTrigger.confirm};
-    vr.buttons = cvr::input::NativeMenuButtons(vr.buttons, menuTrigger);
-    if (menuTrigger.consumeTrigger) vr.rightTrigger = 0.f;
+    const NativeMenuInputTrace menuTrace{menuMode,overlayCapture,vr.buttons,rawRightTrigger,vr.rightTriggerActive,menuTrigger.confirm&&!pointerOwns};
+    if(!pointerOwns)vr.buttons = cvr::input::NativeMenuButtons(vr.buttons, menuTrigger);
+    if (menuTrigger.consumeTrigger || pointerOwns) vr.rightTrigger = 0.f;
     cvr::input::DispatchCyberwareChord();
 
     if (r != ERROR_SUCCESS) {
         memset(pState, 0, sizeof(*pState));
         r = ERROR_SUCCESS;
     }
+    const WORD physicalButtons=pState->Gamepad.wButtons;
     // Exact, already-scanned manual clue only. Capture before scanner X remaps
     // and swallow the whole press so the newly revealed Take needs another X.
     if(cvr::quest::ConsumeManualClueButton(((vr.buttons|pState->Gamepad.wButtons)&0x4000)!=0,true)) {
@@ -336,6 +413,9 @@ DWORD WINAPI HookedXInputGetState(DWORD dwUserIndex, XINPUT_STATE* pState) {
         pState->Gamepad.wButtons &= static_cast<uint16_t>(~0x4000);
     }
     if(overlayCapture){
+        UpdateScannerDpad(&vr,false,false);
+        UpdateScannerGrips(&vr,false);
+        UpdateScannerNavigation(false);
         pState->Gamepad={};g_lookStickX.store(0,std::memory_order_relaxed);
         cvr::swimming::ResetInput();cvr::ladder::ResetInput();
         for(int slot:{30,49,vrshared::kRightSecondaryBtn,vrshared::kLeftSecondaryBtn,vrshared::kRightStickClick,vrshared::kLeftGripPressed,vrshared::kRightTriggerAnalog,vrshared::kLeftTriggerAnalog})
@@ -394,6 +474,13 @@ DWORD WINAPI HookedXInputGetState(DWORD dwUserIndex, XINPUT_STATE* pState) {
     // button. Exit is a deliberate X press now, translated below; nothing else can eject.
     const bool keypadInput = cvr::input::KeypadInputActive();
     const bool gameplayScreen = (g_menuModeValue == 0) && !keypadInput;
+    const bool scannerAllowed=gameplayScreen && !g_isInVehicle && !onLadder && !inWater &&
+        !DeviceCamActive() && !uiPopupOpen && !g_bdActive.load(std::memory_order_relaxed) &&
+        g_sceneTier.load(std::memory_order_relaxed)<=1;
+    const auto dpadScanner=UpdateScannerDpad(&vr,gameplayScreen,scannerAllowed);
+    // Consume only the VR chord before merging. A physical pad's D-pad Up
+    // retains its native action; the scanner chord cannot also use a consumable.
+    vr.buttons=cvr::input::ScannerDpadButtons(vr.buttons,dpadScanner.consumeUp);
     const bool mounted = g_isInVehicle;
     const int vehicleState=g_vehicleState.load(std::memory_order_relaxed);
     const auto vehicleButtons=cvr::input::VehicleButtonPolicy(mounted,vehicleState);
@@ -411,6 +498,8 @@ DWORD WINAPI HookedXInputGetState(DWORD dwUserIndex, XINPUT_STATE* pState) {
     // a slot left standing at 1 would keep firing after the menu closes.
     if (keypadInput || (CyberpunkVR_InputDefaultInUi != 0 &&
         (g_menuModeValue != 0 || g_bdActive.load(std::memory_order_relaxed) != 0))) {
+        UpdateScannerGrips(&vr,false);
+        UpdateScannerNavigation(false);
         pState->Gamepad.wButtons |= vr.buttons;
         const BYTE ltUi = FloatToBYTE(vr.leftTrigger);
         const BYTE rtUi = FloatToBYTE(vr.rightTrigger);
@@ -506,6 +595,8 @@ DWORD WINAPI HookedXInputGetState(DWORD dwUserIndex, XINPUT_STATE* pState) {
     //
     // The hand arms the zone on its own and the click gates the output, so a click with the hand
     // already at the ear takes effect on the same frame.
+    const auto dualScanner=UpdateScannerGrips(&vr,scannerAllowed,
+        g_VRReloadFingerActive[0] || g_VRReloadFingerActive[1] || CyberpunkVR_TwoHandActive);
     bool scannerHold = false;
     {
         static bool   s_earArmed = false;
@@ -515,9 +606,6 @@ DWORD WINAPI HookedXInputGetState(DWORD dwUserIndex, XINPUT_STATE* pState) {
         static double s_inMs = 0.0;    // continuous time INSIDE the zone
         static double s_outMs = 0.0;   // continuous time OUTSIDE it
         static LARGE_INTEGER s_qpc = {};
-        // DUAL-GRIP scanner state, lives outside the ear-zone block so it can be toggled from anywhere.
-        static bool   s_dlgLatch = false;   // dual-grip toggle state
-        static bool   s_dlgPrev = false;    // previous dual-grip state
 
         LARGE_INTEGER now, freq;
         QueryPerformanceCounter(&now);
@@ -531,7 +619,8 @@ DWORD WINAPI HookedXInputGetState(DWORD dwUserIndex, XINPUT_STATE* pState) {
         if (dtMs < 0.0) dtMs = 0.0;
         if (dtMs > 100.0) dtMs = 100.0;   // a hitch must not satisfy a whole window by itself
 
-        if (CyberpunkVR_ScannerGesture != 0) {
+        if (CyberpunkVR_ScannerGesture != 0 && CyberpunkVR_ScannerDualGrip == 0 &&
+            CyberpunkVR_ScannerDpadToggle == 0 && !dualScanner.claimed) {
             // Left hand, HMD-local: [0] valid, [1..3] position. An INVALID sample counts as absence --
             // it feeds the exit timer rather than dropping the scan, because a dropout is exactly what
             // that timer exists to ride out.
@@ -592,24 +681,8 @@ DWORD WINAPI HookedXInputGetState(DWORD dwUserIndex, XINPUT_STATE* pState) {
         }
         s_prevGesture = s_gesture;
 
-        // DUAL-GRIP SCANNER: both grips together act as the scanner toggle. The left grip is
-        // already consumed by the magazine grab (reload) and the cyberware chord, so dual-grip
-        // only works when those are not active and the player is on foot. Release both grips to
-        // close the scanner.
-        if (CyberpunkVR_ScannerDualGrip != 0 && !g_isInVehicle && !onLadder && g_menuModeValue == 0) {
-            const bool bothDown = (vr.leftGrip > 0.5f) && (vr.rightGrip > 0.5f);
-            const bool neitherDown = (vr.leftGrip <= 0.5f) && (vr.rightGrip <= 0.5f);
-            if (bothDown && !s_dlgPrev) {
-                // Rising edge on both grips: toggle the scanner
-                s_dlgLatch = !s_dlgLatch;
-            }
-            if (s_dlgLatch && neitherDown) {
-                // Both released while scanner is open: close it
-                s_dlgLatch = false;
-            }
-            scannerHold = s_dlgLatch;
-        }
-        s_dlgPrev = (vr.leftGrip > 0.5f) && (vr.rightGrip > 0.5f);
+        if (CyberpunkVR_ScannerDpadToggle != 0) scannerHold=dpadScanner.active;
+        else if (CyberpunkVR_ScannerDualGrip != 0) scannerHold=dualScanner.active;
     }
 
     // ---- THE SCANNER, WORKED WITH THE HAND THAT RAISED IT ---------------------------------------
@@ -653,9 +726,6 @@ DWORD WINAPI HookedXInputGetState(DWORD dwUserIndex, XINPUT_STATE* pState) {
         static bool     s_xWasDown     = false;
         static bool     s_r3WasDown    = false;
         static bool     s_rtWasDown    = false;
-        static bool     s_dpadUpWas    = false;
-        static bool     s_dpadDownWas  = false;
-        static uint64_t s_stickUpUntilMs = 0, s_stickDownUntilMs = 0;
         static uint64_t s_upUntilMs = 0, s_downUntilMs = 0, s_applyUntilMs = 0,
                         s_tagUntilMs = 0, s_tabUntilMs = 0;
 
@@ -682,36 +752,6 @@ DWORD WINAPI HookedXInputGetState(DWORD dwUserIndex, XINPUT_STATE* pState) {
             // scanner is not an improvement on doing nothing.
             (void)yDown;
 
-            // THE D-PAD, if it is available from the controller. The Steam Deck and Steam Frame both
-            // have physical D-pads that reach the game through the L3+R3 chord right now -- which asks
-            // for two hands in the middle of a scanner the player is already holding. When dual-grip
-            // is enabled the D-pad is free for scanner navigation directly, without any chord.
-            // The D-pad bits in vr.buttons come from OpenXR actions: /user/hand/left/input/dpad_*.
-            const bool dpadUp   = (vr.buttons & 0x0001) != 0;
-            const bool dpadDown = (vr.buttons & 0x0002) != 0;
-            if ((dpadUp || dpadDown) && CyberpunkVR_ScannerDualGrip != 0) {
-                if (dpadUp   && !s_dpadUpWas)   s_upUntilMs   = now + pulseMs;
-                if (dpadDown && !s_dpadDownWas) s_downUntilMs = now + pulseMs;
-                s_dpadUpWas   = dpadUp;
-                s_dpadDownWas = dpadDown;
-            } else {
-                // FALLBACK TO THE LEFT STICK when the D-pad is not available.
-                const float navFire  = (CyberpunkVR_ScannerStickNavFire  > 0.0f) ? CyberpunkVR_ScannerStickNavFire  : 0.90f;
-                const float navRearm = (CyberpunkVR_ScannerStickNavRearm > 0.0f) ? CyberpunkVR_ScannerStickNavRearm : 0.50f;
-                if (vr.leftThumbY > navFire && s_stickDownUntilMs <= now) {
-                    s_upUntilMs = now + pulseMs;
-                    s_stickDownUntilMs = now + 1;   // one frame gap before the re-arm
-                }
-                if (vr.leftThumbY < -navFire && s_stickUpUntilMs <= now) {
-                    s_downUntilMs = now + pulseMs;
-                    s_stickUpUntilMs = now + 1;
-                }
-                // RE-ARM: the stick has to come back through the threshold. A thumb resting at
-                // 0.85 would keep firing up if it only needed to go below 0.50 to re-arm.
-                if (vr.leftThumbY < navRearm) s_stickDownUntilMs = 0;
-                if (vr.leftThumbY > -navRearm) s_stickUpUntilMs = 0;
-            }
-
             // The tag, on a travel the finger cannot chatter through: 0.65 to arm, 0.35 to release, so
             // one squeeze is one tag and a finger resting on the trigger is not a stream of them.
             if (CyberpunkVR_ScannerTriggerTag != 0) {
@@ -737,8 +777,6 @@ DWORD WINAPI HookedXInputGetState(DWORD dwUserIndex, XINPUT_STATE* pState) {
             s_xWasDown  = false;
             s_r3WasDown = false;
             s_rtWasDown = false;
-            s_dpadUpWas = false;
-            s_dpadDownWas = false;
         }
 
         scanDpadUp   = (now < s_upUntilMs);
@@ -759,7 +797,7 @@ DWORD WINAPI HookedXInputGetState(DWORD dwUserIndex, XINPUT_STATE* pState) {
     // The CET hand-to-holster mod reads this + the IN-GAME wrist-to-hip distances the plugin
     // publishes from the live FK pose to decide whether reaching for a visual holster + a grip
     // press should equip / unequip the corresponding weapon.
-    OpenXRManager::Get().SetSharedSlot(49, !onLadder && vr.rightGrip > 0.5f ? 1.0f : 0.0f);
+    OpenXRManager::Get().SetSharedSlot(49, !onLadder && !dualScanner.claimed && vr.rightGrip > 0.5f ? 1.0f : 0.0f);
     // LEFT hand, for the smoking mod: the lighter is ignited by the left trigger and the cigarette
     // is taken to and from the mouth with either grip, so it needs all three. Only the right grip
     // was ever published; the left pair had no channel at all, and the CET bridge was reading [67]
@@ -768,7 +806,7 @@ DWORD WINAPI HookedXInputGetState(DWORD dwUserIndex, XINPUT_STATE* pState) {
     // the lighter read as permanently at full trigger and the left grip as permanently held.
     OpenXRManager::Get().SetSharedSlot(vrshared::kLeftTriggerAnalog, vr.leftTrigger);
     OpenXRManager::Get().SetSharedSlot(vrshared::kLeftGripPressed,
-                                       !onLadder && vr.leftGrip > 0.5f ? 1.0f : 0.0f);
+                                       !onLadder && !dualScanner.claimed && vr.leftGrip > 0.5f ? 1.0f : 0.0f);
     // Face buttons B / Y as flags, for gestures that want a button (the physical reload drops the magazine on
     // B). Y still reaches the game through the merge above; B no longer does -- it is the port's now, so a
     // magazine drop cannot also dodge.
@@ -864,26 +902,17 @@ DWORD WINAPI HookedXInputGetState(DWORD dwUserIndex, XINPUT_STATE* pState) {
     // AND IT SENDS A KEY, NOT A D-PAD PRESS. IK_Pad_DigitUp/Down are on UI_MoveUp/UI_MoveDown AND on
     // ZoomIn_Button/ZoomOut_Button, so a synthetic D-pad press paged the list and zoomed at the same
     // time. See SendListKey for the mappings this was read out of.
-    if (scannerHold && CyberpunkVR_ScannerFaceNav != 0 && CyberpunkVR_ScannerStickNav != 0 &&
-        !g_isInVehicle && (g_menuModeValue == 0)) {
-        static int s_navArmedDir = 0;
-
-        float navFire = CyberpunkVR_ScannerStickNavFire;
-        if (!(navFire > 0.05f) || navFire > 1.0f) navFire = 0.90f;
-        float navRearm = CyberpunkVR_ScannerStickNavRearm;
-        if (!(navRearm >= 0.0f) || navRearm >= navFire) navRearm = navFire * 0.55f;
-
-        int navDir = 0;
-        if (scannerLy > navFire) navDir = +1;
-        else if (scannerLy < -navFire) navDir = -1;
-
-        if (fabsf(scannerLy) < navRearm) s_navArmedDir = 0;
-        if (navDir != 0 && navDir != s_navArmedDir) {
-            s_navArmedDir = navDir;
-            SendListKey(navDir > 0);
-        }
-
-        if (navDir != 0) ly = 0.0f;   // at the stop the axis is the list's, not the legs'
+    const bool scannerNav=scannerHold && CyberpunkVR_ScannerFaceNav!=0 && CyberpunkVR_ScannerStickNav!=0 &&
+        !g_isInVehicle && g_menuModeValue==0;
+    const int scanDirection=UpdateScannerNavigation(scannerNav,scannerLy,(vr.buttons&1)!=0,(vr.buttons&2)!=0);
+    if(scannerNav) {
+        // Preserve a physical pad; consume only the VR D-pad bits already ORed
+        // above. Native D-pad plus arrow injection would page and zoom together.
+        pState->Gamepad.wButtons &= static_cast<WORD>(~((vr.buttons&3)&~physicalButtons));
+        if(scanDirection)SendListKey(scanDirection>0);
+        float navFire=CyberpunkVR_ScannerStickNavFire;
+        if(!(navFire>.05f && navFire<=1.f))navFire=.9f;
+        if(std::fabs(scannerLy)>navFire)ly=0.f;
     }
 
     const float lyDetent = ly==0 ? 0 : (analogMovement?vr.leftThumbY:ly);

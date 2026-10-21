@@ -277,6 +277,8 @@ if (g_VRRecordFK) {
                 cvr::anim::VrikRestFingerPose(boneBuf,ladderVrik && ladderKinds[0]==0);
                 // ...and the right hand, which is empty exactly while the left one carries the weapon.
                 cvr::anim::VrikRestFingerPoseRight(boneBuf,ladderVrik && ladderKinds[1]==0);
+                if(cvr::anim::IsControllerVrikEnabled(g_VRBind,headAimWork) && !g_VRRecordFK)
+                    VRIK_ApplyTrackedFingers(boneBuf);
                 // ...and as that empty hand reaches back for the carried weapon, the grip it is about to
                 // take, faded in on top of the resting fingers. On top, because reaching for the gun is
                 // the more specific job -- the same order as the two-hand hold below.

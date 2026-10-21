@@ -951,6 +951,15 @@ bool DrawLiveControls(LiveControlsUiState& state,int section) {
                 ImGui::SetTooltip("OR the VR controller state into XInput gamepad 0 every poll.\n"
                                   "Off = the game only sees a physical pad / nothing.");
             }
+            changed |= CheckboxInt("Scanner: D-pad Up toggle", &state.xrScannerDpadToggle);
+            ImGui::TextWrapped("On Index, hold the left stick click and tilt the right stick up to toggle the scanner. Release the direction before toggling again. Grips stay available for items.");
+            ImGui::BeginDisabled(state.xrScannerDpadToggle!=0);
+            changed |= CheckboxInt("Scanner: both grips", &state.xrScannerDualGrip);
+            changed |= CheckboxInt("Scanner: squeeze again to close", &state.xrScannerDualToggle);
+            ImGui::EndDisabled();
+            if(!state.xrScannerDpadToggle)ImGui::TextWrapped("Release both grips before the next scanner chord. Disable squeeze-again to close on both-grip release. Active reloads and two-hand weapon grips take priority.");
+            changed |= CheckboxInt("Native menus: right-hand pointer", &state.xrNativeMenuPointer);
+            ImGui::TextWrapped("Point at the game menu and squeeze the right trigger to click. A still handles hold-to-confirm actions. Disable the pointer to use stick navigation and trigger-as-A.");
 
             ImGui::Separator();
             ImGui::TextUnformatted("Weapon holsters (reach + right grip)");

@@ -61,6 +61,10 @@ struct LiveControlsUiState {
     // when 1, right-stick X is converted from analog rotation to discrete
     // snap-turn pulses of xrSnapTurnAngleDeg.
     int xrXInputHook;
+    int xrScannerDpadToggle = 1;
+    int xrScannerDualGrip = 0;
+    int xrScannerDualToggle = 1;
+    int xrNativeMenuPointer = 1;
     int xrSnapTurn;
     float xrSnapTurnAngleDeg;
     // Locomotion direction source extension. xrMovementControl is the legacy 0/1

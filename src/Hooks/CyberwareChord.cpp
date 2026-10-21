@@ -1,4 +1,5 @@
 #include "Hooks/CyberwareChord.hpp"
+#include "Hooks/ScannerInput.hpp"
 #include "Hooks/KeypadInput.hpp"
 #include "Camera/CameraState.hpp"
 #include "Core/VrCoreShared.hpp"
@@ -15,7 +16,7 @@ cvr::input::CyberwareHold chord;
 std::mutex mutex;
 std::atomic<uint64_t> pendingUntil{};
 bool Allowed() {
-    return g_liveControls.xrXInputHook!=0 && g_menuModeValue==0 && !cvr::vrui::CapturesInput() && !cvr::input::KeypadInputActive() &&
+    return g_liveControls.xrXInputHook!=0 && g_menuModeValue==0 && !cvr::input::ScannerOwnsGrips() && !cvr::vrui::CapturesInput() && !cvr::input::KeypadInputActive() &&
            !DeviceCamActive() && !g_bdActive.load(std::memory_order_relaxed) &&
            g_sceneTier.load(std::memory_order_relaxed)<=1;
 }

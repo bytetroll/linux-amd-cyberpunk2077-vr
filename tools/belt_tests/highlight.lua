@@ -1,15 +1,15 @@
--- Run the actual old/new highlight helpers with lexical mocks, never live writes.
-return function(candidate, reference)
+-- Compare the actual shared and legacy per-hand scans after the same reach fixes.
+return function(candidate)
     assert(loadstring(candidate)) -- Catch the complete module's Lua local limit too.
     local function extract(source)
-        local first=assert(source:find('local function updateHighlight(dt)',1,true))
+        local first=assert(source:find('updateHighlight = function(dt, forceSide)',1,true))
         local last=assert(source:find('local THROW_CFG_VERSION',first,true))
         return source:sub(first,last-1)
     end
     local factories={}
-    for _,source in ipairs({reference,candidate}) do
+    for _,source in ipairs({candidate,candidate}) do
         local text='return function(CFG,S,PERFORMANCE,hipsModelFrame,palmPoint,elementCentre,markable,toHipsFrame,qrot,OFFSET_GROUP,applyLit,reassertDevices,VRPalmModelPos)\n'
-            ..extract(source)..'\nreturn updateHighlight\nend'
+            ..'local updateHighlight\n'..extract(source)..'\nreturn updateHighlight\nend'
         factories[#factories+1]=assert(loadstring(text))()
     end
     local totals={0,0};local comparisons=0
@@ -24,7 +24,7 @@ return function(candidate, reference)
             local function apply(want)
                 state.want=want;state.lit=next(want);applied=applied+1
             end
-            local tick=factory(cfg,state,{legacyHighlightScan=false},
+            local tick=factory(cfg,state,{legacyHighlightScan=mode==1},
                 function() if scenario==5 then return nil end return 0.01,0.02,0,0,0,0,1 end,
                 function(side) return hands[side] end,
                 function(host) local c=centres[host];if c then return c.x,c.y,c.z end end,

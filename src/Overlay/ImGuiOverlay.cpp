@@ -1,4 +1,5 @@
 #include "Utils/DebugGate.hpp"
+#include "Hooks/PhysicalClientRect.hpp"
 #include "Overlay/ImGuiOverlay.hpp"
 #include "Overlay/DrawWork.hpp"
 #include "Overlay/LiveControlsUi.hpp"
@@ -487,7 +488,7 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         UINT virtualHeight = GetForcedDisplayModeHeight();
         if (virtualWidth > 0 && virtualHeight > 0) {
             RECT rect;
-            if (GetClientRect(hwnd, &rect)) {
+            if (cvr::input::PhysicalClientRect(hwnd, &rect)) {
                 int winWidth = rect.right - rect.left;
                 int winHeight = rect.bottom - rect.top;
                 
@@ -529,7 +530,8 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         if(msg==WM_MOUSEMOVE || msg==WM_LBUTTONDOWN || msg==WM_LBUTTONDBLCLK || msg==WM_LBUTTONUP || msg==WM_MOUSEWHEEL || msg==WM_MOUSEHWHEEL){
             const float width=g_desktopWidth.load(),height=g_desktopHeight.load();
             const auto rect=cvr::vrui::DesktopPlacement(width,height);
-            RECT client{};GetClientRect(hwnd,&client);
+            RECT client{};
+            if(!cvr::input::PhysicalClientRect(hwnd,&client))return 0;
             POINT position{LONG(clientMouseX),LONG(clientMouseY)};
             if(msg==WM_MOUSEWHEEL || msg==WM_MOUSEHWHEEL)ScreenToClient(hwnd,&position);
             const float x=(position.x*width/std::max(1L,client.right-client.left)-rect.x)/rect.scale;

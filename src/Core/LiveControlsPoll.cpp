@@ -149,6 +149,10 @@ extern "C" __declspec(dllexport) extern int32_t CyberpunkVR_VrcamPosFromMain;
 extern "C" __declspec(dllexport) extern int32_t CyberpunkVR_DevCamInLocate;
 extern "C" __declspec(dllexport) extern int32_t CyberpunkVR_LensHeadWrite;
 extern "C" __declspec(dllexport) extern int32_t CyberpunkVR_InputDefaultInUi;
+extern "C" __declspec(dllexport) extern int32_t CyberpunkVR_ScannerDualGrip;
+extern "C" __declspec(dllexport) extern int32_t CyberpunkVR_ScannerDpadToggle;
+extern "C" __declspec(dllexport) extern int32_t CyberpunkVR_ScannerDualToggle;
+extern "C" __declspec(dllexport) extern int32_t CyberpunkVR_NativeMenuPointer;
 extern "C" __declspec(dllexport) extern int32_t CyberpunkVR_PopupMagBlockMs;
 extern "C" __declspec(dllexport) extern int32_t CyberpunkVR_DevCamAnyName;
 // The node whose square dispatch draws the scanner outline, and the switch for replacing its shader.
@@ -451,6 +455,10 @@ void PollLiveControls() {
     int32_t  xrDevCamInLocate = CyberpunkVR_DevCamInLocate;
     int32_t  xrLensHeadWrite = CyberpunkVR_LensHeadWrite;
     int32_t  xrInputDefaultInUi = CyberpunkVR_InputDefaultInUi;
+    int32_t xrScannerDualGrip = CyberpunkVR_ScannerDualGrip;
+    int32_t xrScannerDpadToggle = CyberpunkVR_ScannerDpadToggle;
+    int32_t xrScannerDualToggle = CyberpunkVR_ScannerDualToggle;
+    int32_t xrNativeMenuPointer = CyberpunkVR_NativeMenuPointer;
     int32_t  xrPopupMagBlockMs = CyberpunkVR_PopupMagBlockMs;
     int32_t  xrDevCamAnyName = CyberpunkVR_DevCamAnyName;
     float    xrDevCamTolM = CyberpunkVR_DevCamTolM;
@@ -888,6 +896,22 @@ void PollLiveControls() {
             sscanf_s(line, "xr_input_default_in_ui = %d", &intValue) == 1) {
             xrInputDefaultInUi = intValue;
             continue;
+        }
+        if (sscanf_s(line, "xr_scanner_dpad_toggle=%d", &intValue) == 1 ||
+            sscanf_s(line, "xr_scanner_dpad_toggle = %d", &intValue) == 1) {
+            xrScannerDpadToggle=intValue;continue;
+        }
+        if (sscanf_s(line, "xr_scanner_dual_grip=%d", &intValue) == 1 ||
+            sscanf_s(line, "xr_scanner_dual_grip = %d", &intValue) == 1) {
+            xrScannerDualGrip=intValue;continue;
+        }
+        if (sscanf_s(line, "xr_scanner_dual_toggle=%d", &intValue) == 1 ||
+            sscanf_s(line, "xr_scanner_dual_toggle = %d", &intValue) == 1) {
+            xrScannerDualToggle=intValue;continue;
+        }
+        if (sscanf_s(line, "xr_native_menu_pointer=%d", &intValue) == 1 ||
+            sscanf_s(line, "xr_native_menu_pointer = %d", &intValue) == 1) {
+            xrNativeMenuPointer=intValue;continue;
         }
         if (sscanf_s(line, "xr_popup_mag_block_ms=%d", &intValue) == 1 ||
             sscanf_s(line, "xr_popup_mag_block_ms = %d", &intValue) == 1) {
@@ -1568,6 +1592,10 @@ void PollLiveControls() {
     CyberpunkVR_DevCamInLocate = xrDevCamInLocate < 0 ? 0 : (xrDevCamInLocate > 2 ? 2 : xrDevCamInLocate);
     CyberpunkVR_LensHeadWrite = (xrLensHeadWrite != 0) ? 1 : 0;
     CyberpunkVR_InputDefaultInUi = (xrInputDefaultInUi != 0) ? 1 : 0;
+    CyberpunkVR_ScannerDualGrip = xrScannerDualGrip!=0;
+    CyberpunkVR_ScannerDpadToggle = xrScannerDpadToggle!=0;
+    CyberpunkVR_ScannerDualToggle = xrScannerDualToggle!=0;
+    CyberpunkVR_NativeMenuPointer = xrNativeMenuPointer!=0;
     CyberpunkVR_PopupMagBlockMs =
         (xrPopupMagBlockMs >= 0 && xrPopupMagBlockMs <= 10000) ? xrPopupMagBlockMs : 1000;
     CyberpunkVR_DevCamAnyName = (xrDevCamAnyName != 0) ? 1 : 0;
@@ -1724,6 +1752,10 @@ LiveControlsUiState MakeLiveControlsUiState() {
     state.xrMovementControl = g_liveControls.xrMovementControl;
     state.xrDisableMouseY = g_liveControls.xrDisableMouseY;
     state.xrXInputHook = g_liveControls.xrXInputHook;
+    state.xrScannerDualGrip = CyberpunkVR_ScannerDualGrip;
+    state.xrScannerDpadToggle = CyberpunkVR_ScannerDpadToggle;
+    state.xrScannerDualToggle = CyberpunkVR_ScannerDualToggle;
+    state.xrNativeMenuPointer = CyberpunkVR_NativeMenuPointer;
     state.xrSnapTurn = g_liveControls.xrSnapTurn;
     state.xrSnapTurnAngleDeg = g_liveControls.xrSnapTurnAngleDeg;
     state.xrMovementSource = g_liveControls.xrMovementSource;
@@ -1876,6 +1908,9 @@ void PersistLiveControlsUiState(const LiveControlsUiState& state) {
     fprintf(file, "xr_dev_cam_in_locate=%d\n", CyberpunkVR_DevCamInLocate);
     fprintf(file, "xr_lens_head_write=%d\n", CyberpunkVR_LensHeadWrite);
     fprintf(file, "xr_input_default_in_ui=%d\n", CyberpunkVR_InputDefaultInUi);
+    fprintf(file,"xr_scanner_dual_grip=%d\nxr_scanner_dual_toggle=%d\n",state.xrScannerDualGrip!=0,state.xrScannerDualToggle!=0);
+    fprintf(file,"xr_scanner_dpad_toggle=%d\n",state.xrScannerDpadToggle!=0);
+    fprintf(file,"xr_native_menu_pointer=%d\n",state.xrNativeMenuPointer!=0);
     fprintf(file, "xr_popup_mag_block_ms=%d\n", CyberpunkVR_PopupMagBlockMs);
     fprintf(file, "xr_vrcam_pos_from_main=%d\n", CyberpunkVR_VrcamPosFromMain);
     // Hex, because the value is an RVA and it is read straight off a log line printed in hex.
@@ -2137,6 +2172,10 @@ extern "C" void SetLiveControlsUiState(const LiveControlsUiState* state, int per
         state->xrCutsceneSuspendTier,state->xrVehicleCutsceneSuspendTier,true);
     g_liveControls.xrDisableMouseY = state->xrDisableMouseY != 0 ? 1 : 0;
     g_liveControls.xrXInputHook = state->xrXInputHook != 0 ? 1 : 0;
+    CyberpunkVR_ScannerDualGrip = state->xrScannerDualGrip!=0;
+    CyberpunkVR_ScannerDpadToggle = state->xrScannerDpadToggle!=0;
+    CyberpunkVR_ScannerDualToggle = state->xrScannerDualToggle!=0;
+    CyberpunkVR_NativeMenuPointer = state->xrNativeMenuPointer!=0;
     g_liveControls.xrSnapTurn = state->xrSnapTurn != 0 ? 1 : 0;
     g_liveControls.xrSnapTurnAngleDeg = state->xrSnapTurnAngleDeg > 0.0f ? state->xrSnapTurnAngleDeg : 30.0f;
     g_liveControls.xrXInputInstall = state->xrXInputInstall != 0 ? 1 : 0;

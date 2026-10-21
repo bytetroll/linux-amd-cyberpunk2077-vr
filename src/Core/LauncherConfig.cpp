@@ -197,6 +197,7 @@ void EnsureLiveControlFileExists() {
     fprintf(file, "xr_movement_control=0\n");
     fprintf(file, "xr_disable_mouse_y=1\n");
     fprintf(file, "xr_xinput_hook=1\n");
+    fprintf(file,"xr_scanner_dpad_toggle=1\nxr_scanner_dual_grip=0\nxr_scanner_dual_toggle=1\n");
     fprintf(file, "xr_snap_turn=0\n");
     fprintf(file, "xr_snap_turn_angle_deg=30\n");
     fprintf(file, "xr_movement_source=0\n");
@@ -279,4 +280,3 @@ void SaveLauncherConfig(int width, int height) {
     fprintf(file, "launcher_delay_ms=%d\n", g_launcherDelayMs);
     fclose(file);
 }
-

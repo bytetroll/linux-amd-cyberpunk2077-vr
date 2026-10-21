@@ -16,11 +16,14 @@ Included Linux/AMD work:
 - Focused OpenXR frame-phase, layer and body-pose diagnostics.
 - A version-guarded Proton OpenXR workaround and a source patch for mixed projection/quad layer allocation.
 - Early controller-input initialization and right-trigger confirmation in native menus.
+- A right-controller pointer with inventory dragging, a D-pad scanner toggle, and Index control documentation.
+- Holstering independent of outfit names, with protection against left-hand carry redrawing a just-holstered weapon.
+- Corrected physical-crouch height reference and optional individual finger articulation from OpenXR hand joints.
 - Recovery of an active body follow after brief tracking loss.
 - A separate OpenXR runtime queue on Proton/SteamVR, with explicit synchronization to the game queue.
 - A Linux cross-build and focused regression tests.
 
-**Remaining issues:** uneven VR frame delivery, SteamVR void/fade during fast head turns, and some body/head desynchronization. Measurements attribute most long submission cycles to swapchain-release waits on the shared game queue. The latest menu, body-recovery and runtime-queue changes are undergoing headset validation; their real-world improvement is not yet measured. Native frame generation is disabled for the Linux/AMD build; ray/path tracing and other hardware combinations are not validated here.
+**Remaining issues:** uneven VR frame delivery, SteamVR void/fade during fast head turns, and some body/head desynchronization. Swapchain-release waits remain visible with the separate runtime queue; they still depend on the game completing its image copies. The latest input, stance and finger changes require headset validation. Native frame generation is disabled for the Linux/AMD build; ray/path tracing and other hardware combinations are not validated here.
 
 ## Getting started
 
@@ -29,9 +32,9 @@ This repository distributes source, not a complete game-mod bundle. Game-derived
 1. Obtain the original mod's [0.1.7 release and installation instructions](https://github.com/dariulone/cyberpunk-vr-port/releases/tag/0.1.7), together with its required dependencies and assets from their authors. See [third-party notices](THIRD_PARTY_NOTICES.md) for attribution and separately licensed components.
 2. [Build the Linux/AMD plugin](BUILD.md). Keep the upstream archive assets and required sight-shader files from your legitimate mod installation.
 3. With the game closed, back up the current plugin **outside** the game's plugin directories. Replace `red4ext/plugins/CyberpunkVR_Stereo/CyberpunkVR_Stereo.dll` with your build. Keep a single active VR plugin; retired `CyberpunkVR_Hands.dll` or backup DLLs in plugin folders can be loaded alongside it.
-4. Copy the two files from `mods/cet/CyberpunkVRPort_TacticalBelt/grenade/` named `grenade.lua` and `hold_pose_validity.lua` to the corresponding installed CET mod directory. Preserve your player configuration. The other source modules are available for development; do not blindly replace an unrelated mod setup.
+4. Copy the two files from `mods/cet/CyberpunkVRPort_TacticalBelt/grenade/` named `grenade.lua` and `hold_pose_validity.lua` to the corresponding installed CET mod directory. For the holster/carry fixes, also update `init.lua` in the installed `CyberpunkVRPort_Holster` and `CyberpunkVRPort_Weapon` CET modules, and `vrport_holster.reds` in `r6/scripts/CyberpunkVRPort_Holster`, using the corresponding files under `mods/`. Keep those scripts and the plugin from the same revision. Preserve player configuration and unrelated mods.
 5. Follow the [Linux runtime notes](docs/LINUX_RUNTIME.md), including the version-specific Proton workaround. Start SteamVR before the game.
-6. Stand upright facing forward and use **F7** to recenter. **F10** opens the VR overlay; holding both stick clicks also opens it. See the [upstream controls](https://github.com/dariulone/cyberpunk-vr-port#controls) for gameplay bindings.
+6. Stand upright facing forward and use **F7** to recenter. **F10** opens the VR overlay; holding both stick clicks also opens it. See the [Index controls](docs/INDEX_CONTROLS.md) for the current mappings and the [upstream controls](https://github.com/dariulone/cyberpunk-vr-port#controls) for additional gameplay gestures.
 
 A newly built DLL alone does not replace the upstream archives, dependencies, runtime setup or CET files. Existing game/mod installations should be backed up before testing.
 
